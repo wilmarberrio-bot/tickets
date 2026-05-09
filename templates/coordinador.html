@@ -1,1 +1,839 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Torre de Control FTTH — Coordinador</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
 
+<!-- HEADER -->
+<div class="hdr">
+  <div style="display:flex;align-items:center;gap:12px">
+    <div class="live"><div class="ld"></div>EN VIVO</div>
+    <h1>🛰 Torre de Control FTTH</h1>
+    <span style="font-size:11px;color:#8b949e">Coordinador: {{ nombre }}</span>
+  </div>
+  <div class="hdr-r">
+    <span id="alertPill" class="alert-pill" onclick="goTab('tickets')">⚠ 0 alertas</span>
+    <span id="clock">--:--</span>
+    <a href="/logout" style="color:#8b949e;text-decoration:none;font-size:11px">🚪 Salir</a>
+  </div>
+</div>
+
+<!-- TABS -->
+<div class="tabs">
+  <div class="tab on"  onclick="goTab('dashboard')">📊 Dashboard</div>
+  <div class="tab"     onclick="goTab('tickets')">🎫 Tickets</div>
+  <div class="tab"     onclick="goTab('nuevo')">➕ Nuevo Ticket</div>
+  <div class="tab"     onclick="goTab('reinc')">🔁 Reincidencias</div>
+  <div class="tab"     onclick="goTab('tecnicos')">👷 Técnicos</div>
+</div>
+
+<!-- ══════ DASHBOARD ══════ -->
+<div id="tab-dashboard" class="tp on content">
+  <div class="date-bar" id="db-bar">
+    <label>📅 Periodo:</label>
+    <button class="qbtn" onclick="setQ('db','hoy',this)">Hoy</button>
+    <button class="qbtn" onclick="setQ('db','ayer',this)">Ayer</button>
+    <button class="qbtn" onclick="setQ('db','semana',this)">Esta semana</button>
+    <button class="qbtn on" onclick="setQ('db','mes',this)">Este mes</button>
+    <button class="qbtn" onclick="setQ('db','todo',this)">Todo</button>
+    <span style="color:#8b949e;font-size:11px">|</span>
+    <label>Desde</label><input type="date" id="db-d" onchange="applyF('db')">
+    <label>Hasta</label><input type="date" id="db-h" onchange="applyF('db')">
+    <span id="db-res" style="margin-left:auto;font-size:11px;color:var(--az2);font-weight:600">— tickets</span>
+  </div>
+  <div id="db-alert" class="alert-strip rojo" style="display:none"></div>
+  <div class="kpi-row">
+    <div class="kpi red">  <div class="lbl">🔴 Abiertos</div>    <div class="val" id="k1">—</div><div class="sub" id="k1s">Sin asignar: —</div></div>
+    <div class="kpi yellow"><div class="lbl">🟡 En Tránsito</div> <div class="val" id="k2">—</div><div class="sub">En camino</div></div>
+    <div class="kpi blue"> <div class="lbl">🔵 En Sitio</div>     <div class="val" id="k3">—</div><div class="sub">Diagnosticando</div></div>
+    <div class="kpi green"><div class="lbl">🟢 Cerrados</div>      <div class="val" id="k4">—</div><div class="sub" id="k4s">FCR: —%</div></div>
+    <div class="kpi purple"><div class="lbl">🟣 Reincidentes</div><div class="val" id="k5">—</div><div class="sub">Sites afectados</div></div>
+  </div>
+  <div class="kpi-row">
+    <div class="kpi blue">  <div class="lbl">⏱ MTTR</div>         <div class="val" id="k6" style="font-size:20px">—</div><div class="sub">Meta &lt;2h</div></div>
+    <div class="kpi yellow"><div class="lbl">👥 Afectados</div>     <div class="val" id="k7" style="font-size:20px">—</div><div class="sub">Sin servicio</div></div>
+    <div class="kpi red">   <div class="lbl">🚨 Sin Asignar</div>   <div class="val" id="k8" style="font-size:20px">—</div><div class="sub">Urgente</div></div>
+    <div class="kpi purple"><div class="lbl">🔁 Tasa Reinc.</div>   <div class="val" id="k9" style="font-size:20px">—</div><div class="sub">Meta &lt;10%</div></div>
+    <div class="kpi green"> <div class="lbl">📊 Total</div>         <div class="val" id="k10" style="font-size:20px">—</div><div class="sub">tickets periodo</div></div>
+  </div>
+  <div class="two-col">
+    <div class="panel"><div class="ph"><h3>🏗 Sites más reincidentes</h3><span class="badge" id="db-sb">Periodo</span></div><div class="bar-list" id="db-sites"></div></div>
+    <div class="panel"><div class="ph"><h3>🔧 Tipos de falla</h3><span class="badge">Distribución</span></div><div class="bar-list" id="db-fallas"></div></div>
+  </div>
+  <div class="panel"><div class="ph"><h3>⚡ Actividad reciente</h3><span class="badge" id="db-ab">0</span></div><div class="tl" id="db-act"></div></div>
+</div>
+
+<!-- ══════ TICKETS ══════ -->
+<div id="tab-tickets" class="tp content">
+  <div class="date-bar" id="tk-bar">
+    <label>📅 Periodo:</label>
+    <button class="qbtn" onclick="setQ('tk','hoy',this)">Hoy</button>
+    <button class="qbtn" onclick="setQ('tk','ayer',this)">Ayer</button>
+    <button class="qbtn" onclick="setQ('tk','semana',this)">Esta semana</button>
+    <button class="qbtn on" onclick="setQ('tk','mes',this)">Este mes</button>
+    <button class="qbtn" onclick="setQ('tk','todo',this)">Todo</button>
+    <span style="color:#8b949e;font-size:11px">|</span>
+    <label>Desde</label><input type="date" id="tk-d" onchange="applyF('tk')">
+    <label>Hasta</label><input type="date" id="tk-h" onchange="applyF('tk')">
+    <span id="tk-res" style="margin-left:auto;font-size:11px;color:var(--az2);font-weight:600">—</span>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+    <button class="qbtn on" onclick="setEst(this,'all')">Todos</button>
+    <button class="qbtn"    onclick="setEst(this,'ABIERTO')">🔴 Abiertos</button>
+    <button class="qbtn"    onclick="setEst(this,'EN_TRANSITO')">🟡 En Tránsito</button>
+    <button class="qbtn"    onclick="setEst(this,'EN_SITIO')">🔵 En Sitio</button>
+    <button class="qbtn"    onclick="setEst(this,'CERRADO')">🟢 Cerrados</button>
+    <button class="qbtn"    onclick="setEst(this,'ESCALADO')">🟣 Escalados</button>
+    <span id="tk-badge" style="margin-left:auto;font-size:11px;color:#8b949e">0 tickets</span>
+  </div>
+  <div class="panel">
+    <div class="ph"><h3>🎫 Gestión de Tickets</h3><button class="btn btn-a btn-sm" onclick="loadTickets()">↺ Actualizar</button></div>
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th>Ticket</th><th>Fecha</th><th>Site / Torre</th><th>ACC / IP</th>
+          <th>Falla</th><th>Afect.</th><th>Técnico asignado</th>
+          <th>Estado</th><th>⏱ Abierto</th><th>Reinc.</th><th>Acciones</th>
+        </tr></thead>
+        <tbody id="tk-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div id="topo-panel" class="panel" style="display:none">
+    <div class="ph"><h3>🔗 Topología — <span id="topo-tit"></span></h3>
+      <button class="btn btn-g btn-sm" onclick="document.getElementById('topo-panel').style.display='none'">✕</button></div>
+    <div class="topo" id="topo-cont"></div>
+    <div id="topo-macs" style="padding:0 14px 12px;font-size:11px;color:#8b949e"></div>
+  </div>
+</div>
+
+<!-- ══════ NUEVO TICKET ══════ -->
+<div id="tab-nuevo" class="tp content">
+  <div class="two-col">
+    <!-- Opción A: Pegar mensaje de Slack -->
+    <div class="panel">
+      <div class="ph"><h3>📋 Pegar mensaje de Slack</h3><span class="badge">Auto-parseo</span></div>
+      <div style="padding:14px">
+        <p style="font-size:12px;color:#8b949e;margin-bottom:10px">
+          Copia y pega el mensaje tal como llega al canal de Slack. El sistema extrae automáticamente todos los campos.
+        </p>
+        <textarea id="slack-raw" class="slack-raw" rows="12" placeholder="Ticket #499730
+Edge/ACC COL_MDE_GAPA_CN_02_EDGE04 - 100.98.165.9
+COL_MDE_GAPA_CN_02_ACC02 - 100.98.165.242
+Nombre del sitio: Gaita Apartamentos
+Torre 2
+Modelo equipo: S600
+# afectados: 5
+Tipo de problema: Ausencia de Servicio
+Observación:
+Se presenta la caída del SW ADMIN...
+Usuarios afectados:
+04:8f:00:03:29:a4 APT 2502
+04:8f:00:03:32:5f APT 2201"></textarea>
+        <button class="btn btn-a" style="width:100%;margin-top:10px;padding:10px" onclick="parsearSlack()">
+          ⚡ Parsear y llenar formulario →
+        </button>
+        <div id="parse-result" style="margin-top:8px;font-size:11px;color:var(--vd2);display:none"></div>
+      </div>
+    </div>
+
+    <!-- Opción B: Formulario manual -->
+    <div class="panel">
+      <div class="ph"><h3>✏️ Ingreso manual</h3><span class="badge">Campos directos</span></div>
+      <div style="padding:14px">
+        <div class="mrow">
+          <div class="mf"><label>Ticket Slack #</label><input type="text" id="n-slack" placeholder="499730"></div>
+          <div class="mf"><label>Fecha apertura</label><input type="date" id="n-fecha"></div>
+        </div>
+        <div class="mf"><label>Nombre del site *</label><input type="text" id="n-site" placeholder="Gaita Apartamentos"></div>
+        <div class="mrow">
+          <div class="mf"><label>Torre *</label><input type="text" id="n-torre" placeholder="Torre 2"></div>
+          <div class="mf"><label>Modelo equipo</label><input type="text" id="n-modelo" placeholder="S600"></div>
+        </div>
+        <div class="mrow">
+          <div class="mf"><label>Nombre ACC</label><input type="text" id="n-acc-nom" placeholder="COL_MDE_GAPA_CN_02_ACC02"></div>
+          <div class="mf"><label>IP del ACC</label><input type="text" id="n-acc-ip" placeholder="100.98.165.242"></div>
+        </div>
+        <div class="mrow">
+          <div class="mf"><label>Nombre Edge</label><input type="text" id="n-edge-nom" placeholder="COL_MDE_GAPA_CN_02_EDGE04"></div>
+          <div class="mf"><label>IP del Edge</label><input type="text" id="n-edge-ip" placeholder="100.98.165.9"></div>
+        </div>
+        <div class="mrow">
+          <div class="mf"><label># Afectados *</label><input type="number" id="n-afect" placeholder="5" min="0"></div>
+          <div class="mf"><label>Appointment #</label><input type="text" id="n-appt" placeholder="273081"></div>
+        </div>
+        <div class="mf"><label>Tipo de problema *</label>
+          <select id="n-tipo">
+            <option>Ausencia de Servicio</option><option>Intermitencia</option>
+            <option>SW desconectado</option><option>Energía / UPS</option>
+            <option>Saturación de puertos</option><option>Error de configuración</option>
+            <option>Velocidad degradada</option>
+          </select></div>
+        <div class="mf"><label>Observación del mensaje</label>
+          <textarea id="n-obs" rows="3" style="width:100%;background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#e6edf3;font-size:12px;outline:none;resize:vertical" placeholder="Describe el evento según el mensaje recibido..."></textarea></div>
+        <div class="mf"><label>MACs / Apartamentos afectados</label>
+          <textarea id="n-macs" rows="3" style="width:100%;background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#e6edf3;font-size:12px;outline:none;resize:vertical" placeholder="04:8f:00:03:29:a4 APT 2502&#10;04:8f:00:03:32:5f APT 2201"></textarea></div>
+        <div class="mrow">
+          <div class="mf"><label>Link topología (Drive)</label><input type="url" id="n-topo" placeholder="https://drive.google.com/..."></div>
+          <div class="mf"><label>Link ubicación (Maps)</label><input type="url" id="n-maps" placeholder="https://maps.google.com/..."></div>
+        </div>
+        <button class="btn btn-a" style="width:100%;padding:10px;margin-top:4px" onclick="registrarTicket()">
+          📥 Registrar Ticket
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ REINCIDENCIAS ══════ -->
+<div id="tab-reinc" class="tp content">
+  <div class="date-bar">
+    <label>📅 Periodo:</label>
+    <button class="qbtn" onclick="setQ('rc','semana',this)">Esta semana</button>
+    <button class="qbtn on" onclick="setQ('rc','mes',this)">Este mes</button>
+    <button class="qbtn" onclick="setQ('rc','todo',this)">Histórico</button>
+    <span style="color:#8b949e;font-size:11px">|</span>
+    <label>Desde</label><input type="date" id="rc-d" onchange="applyF('rc')">
+    <label>Hasta</label><input type="date" id="rc-h" onchange="applyF('rc')">
+  </div>
+  <div class="alert-strip amarillo">⚙️ <strong>Motor activo:</strong>&nbsp;R1: Site ≥3 eventos/mes → ROJO | R2: ACC ≥2 eventos/mes → AMARILLO | R6: >10 afectados → Masivo</div>
+  <div class="three-col" id="rc-panels"></div>
+  <div class="panel"><div class="ph"><h3>📋 Tickets reincidentes</h3><span class="badge" id="rc-badge">0</span></div>
+    <div class="tw"><table><thead><tr><th>Ticket</th><th>Fecha</th><th>Site / Torre</th><th>Evento #</th><th>Semáforo</th><th>Técnico</th><th>Estado</th></tr></thead>
+      <tbody id="rc-tbody"></tbody></table></div></div>
+</div>
+
+<!-- ══════ TÉCNICOS ══════ -->
+<div id="tab-tecnicos" class="tp content">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h3 style="font-size:14px">👷 Gestión de Técnicos</h3>
+    <button class="btn btn-a" onclick="document.getElementById('m-nuevo-tec').classList.add('on')">+ Agregar Técnico</button>
+  </div>
+  <div class="panel">
+    <div class="ph"><h3>Técnicos registrados</h3><span class="badge" id="tec-badge">0</span></div>
+    <div class="tw">
+      <table>
+        <thead><tr><th>#</th><th>Nombre</th><th>Zona</th><th>Teléfono</th><th>Slack ID</th><th>Tickets mes</th><th>En curso</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody id="tec-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: ASIGNAR TÉCNICO -->
+<div class="overlay" id="m-asignar">
+  <div class="modal">
+    <h2>🎫 Asignar Ticket</h2>
+    <div class="msub" id="m-asignar-info">Cargando...</div>
+    <div id="m-asignar-hist" style="background:var(--g1);border-radius:6px;padding:10px;margin-bottom:12px;font-size:11px;color:#8b949e"></div>
+    <div class="mf"><label>Técnico a asignar *</label>
+      <select id="m-tec-sel"><option value="">-- Selecciona técnico --</option></select></div>
+    <div class="mf"><label>Nota de asignación</label>
+      <input type="text" id="m-asignar-nota" placeholder="Ej: Llevar patchcord de repuesto, herramienta de fusión..."></div>
+    <div class="mbtns">
+      <button class="btn btn-g" onclick="closeModal('m-asignar')">Cancelar</button>
+      <button class="btn btn-a" onclick="confirmarAsignacion()">✅ Confirmar Asignación</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: NUEVO TÉCNICO -->
+<div class="overlay" id="m-nuevo-tec">
+  <div class="modal">
+    <h2>👷 Agregar Técnico</h2>
+    <div class="msub">El técnico podrá acceder al sistema seleccionando su nombre en la pantalla de login.</div>
+    <div class="mf"><label>Nombre completo *</label><input type="text" id="nt-nombre" placeholder="Oscar Alejandro Yepes Villa"></div>
+    <div class="mrow">
+      <div class="mf"><label>Zona</label>
+        <select id="nt-zona">
+          <option value="">-- Sin zona --</option>
+          <option>Norte</option><option>Sur</option><option>Centro</option>
+          <option>Oriente</option><option>Occidente</option><option>Rural</option>
+        </select></div>
+      <div class="mf"><label>Teléfono</label><input type="tel" id="nt-tel" placeholder="+573001234567"></div>
+    </div>
+    <div class="mf"><label>Slack User ID</label><input type="text" id="nt-slack" placeholder="U08AB1234 (opcional)"></div>
+    <div class="mbtns">
+      <button class="btn btn-g" onclick="closeModal('m-nuevo-tec')">Cancelar</button>
+      <button class="btn btn-a" onclick="crearTecnico()">✅ Agregar Técnico</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: EDITAR TÉCNICO -->
+<div class="overlay" id="m-editar-tec">
+  <div class="modal">
+    <h2>✏️ Editar Técnico</h2>
+    <input type="hidden" id="et-id">
+    <div class="mf"><label>Nombre completo *</label><input type="text" id="et-nombre"></div>
+    <div class="mrow">
+      <div class="mf"><label>Zona</label>
+        <select id="et-zona"><option value="">-- Sin zona --</option>
+          <option>Norte</option><option>Sur</option><option>Centro</option>
+          <option>Oriente</option><option>Occidente</option><option>Rural</option>
+        </select></div>
+      <div class="mf"><label>Teléfono</label><input type="tel" id="et-tel"></div>
+    </div>
+    <div class="mf"><label>Slack User ID</label><input type="text" id="et-slack"></div>
+    <div class="mf"><label>Estado</label>
+      <select id="et-activo"><option value="true">✅ Activo</option><option value="false">❌ Inactivo</option></select></div>
+    <div class="mbtns">
+      <button class="btn btn-g" onclick="closeModal('m-editar-tec')">Cancelar</button>
+      <button class="btn btn-a" onclick="guardarTecnico()">💾 Guardar cambios</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════
+// ESTADO Y FILTROS
+// ══════════════════════════════════════════
+const HOY = new Date(); HOY.setHours(0,0,0,0);
+const fmtD = d => d.toISOString().slice(0,10);
+const dAgo = n => { const d = new Date(HOY); d.setDate(d.getDate()-n); return d; };
+
+const F = {
+  db:  { d: null, h: null },
+  tk:  { d: null, h: null, est: 'all' },
+  rc:  { d: null, h: null },
+};
+
+let curTicketId  = null;
+let TECNICOS_ALL = [];
+let TICKETS_CACHE= [];
+
+const rQ = q => {
+  const H = fmtD(HOY);
+  if (q==='hoy')    return { d: H, h: H };
+  if (q==='ayer')   { const y = fmtD(dAgo(1)); return { d: y, h: y }; }
+  if (q==='semana') return { d: fmtD(dAgo(6)), h: H };
+  if (q==='mes')    return { d: fmtD(dAgo(30)), h: H };
+  return { d: '2026-01-01', h: H };
+};
+
+// ── Tabs ──
+function goTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+  document.querySelectorAll('.tp').forEach(t => t.classList.remove('on'));
+  const idx = ['dashboard','tickets','nuevo','reinc','tecnicos'].indexOf(name);
+  document.querySelectorAll('.tab')[idx]?.classList.add('on');
+  document.getElementById('tab-'+name)?.classList.add('on');
+  if (name==='dashboard') loadDashboard();
+  if (name==='tickets')   loadTickets();
+  if (name==='reinc')     loadReinc();
+  if (name==='tecnicos')  loadTecnicos();
+}
+
+// ── Filtros de fecha ──
+function setQ(ns, q, btn) {
+  const r = rQ(q);
+  F[ns].d = r.d; F[ns].h = r.h;
+  const ids = { db:['db-d','db-h'], tk:['tk-d','tk-h'], rc:['rc-d','rc-h'] }[ns];
+  if (ids) {
+    const el0 = document.getElementById(ids[0]);
+    const el1 = document.getElementById(ids[1]);
+    if (el0) el0.value = r.d;
+    if (el1) el1.value = r.h;
+  }
+  btn.closest('.date-bar').querySelectorAll('.qbtn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  if (ns==='db') loadDashboard();
+  if (ns==='tk') loadTickets();
+  if (ns==='rc') loadReinc();
+}
+
+function applyF(ns) {
+  const ids = { db:['db-d','db-h'], tk:['tk-d','tk-h'], rc:['rc-d','rc-h'] }[ns];
+  F[ns].d = document.getElementById(ids[0])?.value || null;
+  F[ns].h = document.getElementById(ids[1])?.value || null;
+  document.getElementById(ids[0])?.closest('.date-bar')?.querySelectorAll('.qbtn')
+    .forEach(b => b.classList.remove('on'));
+  if (ns==='db') loadDashboard();
+  if (ns==='tk') loadTickets();
+  if (ns==='rc') loadReinc();
+}
+
+function setEst(btn, est) {
+  F.tk.est = est;
+  btn.closest('div').querySelectorAll('.qbtn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  renderTickets(TICKETS_CACHE);
+}
+
+// ══════════════════════════════════════════
+// API helpers
+// ══════════════════════════════════════════
+async function api(url, opts={}) {
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Error del servidor' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ══════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════
+async function loadDashboard() {
+  const params = new URLSearchParams();
+  if (F.db.d) params.set('desde', F.db.d);
+  if (F.db.h) params.set('hasta', F.db.h);
+
+  const [kpis, acts] = await Promise.all([
+    api('/api/kpis?' + params),
+    api('/api/actividad?' + params)
+  ]);
+
+  // KPIs
+  document.getElementById('k1').textContent  = kpis.abiertos;
+  document.getElementById('k1s').textContent = `Sin asignar: ${kpis.sin_asignar}`;
+  document.getElementById('k2').textContent  = kpis.en_transito;
+  document.getElementById('k3').textContent  = kpis.en_sitio;
+  document.getElementById('k4').textContent  = kpis.cerrados;
+  document.getElementById('k4s').textContent = `FCR: ${kpis.fcr}%`;
+  document.getElementById('k5').textContent  = kpis.sites_rojo;
+  document.getElementById('k7').textContent  = kpis.afectados;
+  document.getElementById('k8').textContent  = kpis.sin_asignar;
+  document.getElementById('k9').textContent  = `${kpis.tasa_reinc}%`;
+  document.getElementById('k10').textContent = kpis.total;
+  document.getElementById('db-res').textContent = `${kpis.total} tickets`;
+
+  if (kpis.mttr) {
+    const h = Math.floor(kpis.mttr/60), m = kpis.mttr % 60;
+    document.getElementById('k6').textContent = `${h}h ${m}m`;
+  } else {
+    document.getElementById('k6').textContent = '--';
+  }
+
+  const alertCount = kpis.sin_asignar + (kpis.sites_rojo > 0 ? 1 : 0);
+  document.getElementById('alertPill').textContent = `⚠ ${alertCount} alertas`;
+
+  const aEl = document.getElementById('db-alert');
+  if (kpis.sin_asignar > 0 || kpis.sites_rojo > 0) {
+    aEl.style.display = 'flex';
+    aEl.innerHTML = `⚠️ <strong>CRÍTICO:</strong>&nbsp;${kpis.sin_asignar > 0 ? kpis.sin_asignar + ' ticket(s) sin asignar. ' : ''}${kpis.sites_rojo > 0 ? kpis.sites_rojo + ' site(s) en semáforo ROJO.' : ''}`;
+  } else {
+    aEl.style.display = 'none';
+  }
+
+  // Sites bar
+  const cols = { ROJO: 'var(--rj2)', AMARILLO: 'var(--am2)', VERDE: 'var(--vd2)' };
+  const sems = { ROJO: 'sr', AMARILLO: 'sy', VERDE: 'sg' };
+  const maxS = kpis.sites[0]?.[1].count || 1;
+  document.getElementById('db-sites').innerHTML = kpis.sites.length
+    ? kpis.sites.map(([name, d]) =>
+        `<div class="bi"><div class="bl"><span><span class="sem ${sems[d.semaforo]||'sg'}"></span> ${name}</span><span style="color:#8b949e">${d.count}</span></div><div class="bt"><div class="bf" style="width:${Math.round(d.count/maxS*100)}%;background:${cols[d.semaforo]||'var(--vd2)'}"></div></div></div>`
+      ).join('')
+    : '<div class="empty">Sin datos en el periodo</div>';
+
+  // Fallas bar
+  const fColors = ['var(--rj2)','var(--am2)','var(--az2)','var(--vd2)','var(--mo2)','#8b949e'];
+  const maxF = kpis.fallas[0]?.[1] || 1;
+  document.getElementById('db-fallas').innerHTML = kpis.fallas.length
+    ? kpis.fallas.map(([tipo, cnt], i) =>
+        `<div class="bi"><div class="bl"><span>${tipo}</span><span style="color:#8b949e">${cnt}</span></div><div class="bt"><div class="bf" style="width:${Math.round(cnt/maxF*100)}%;background:${fColors[i]}"></div></div></div>`
+      ).join('')
+    : '<div class="empty">Sin datos</div>';
+
+  // Actividad
+  document.getElementById('db-ab').textContent = acts.length;
+  document.getElementById('db-act').innerHTML = acts.length
+    ? acts.map((a, i) => {
+        const col = a.tipo==='alert'?'var(--rj2)':a.tipo==='closed'?'var(--vd2)':a.tipo==='new'?'var(--az2)':'var(--am2)';
+        const d = new Date(a.fecha);
+        const time = d.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
+        return `<div class="tl-i"><div class="tl-l"><div class="tl-d" style="background:${col}"></div>${i<acts.length-1?'<div class="tl-c"></div>':''}</div><div class="tl-b"><div class="tl-t">${a.texto}</div><div class="tl-m">${time} — ${d.toLocaleDateString('es-CO')}</div></div></div>`;
+      }).join('')
+    : '<div class="empty">Sin actividad en el periodo</div>';
+}
+
+// ══════════════════════════════════════════
+// TICKETS
+// ══════════════════════════════════════════
+async function loadTickets() {
+  const params = new URLSearchParams();
+  if (F.tk.d) params.set('desde', F.tk.d);
+  if (F.tk.h) params.set('hasta', F.tk.h);
+  const tickets = await api('/api/tickets?' + params);
+  TICKETS_CACHE = tickets;
+  renderTickets(tickets);
+}
+
+function renderTickets(all) {
+  const list = F.tk.est === 'all' ? all : all.filter(t => t.estado === F.tk.est);
+  document.getElementById('tk-badge').textContent = `${list.length} tickets`;
+  document.getElementById('tk-res').textContent = `${list.length} tickets`;
+
+  document.getElementById('tk-tbody').innerHTML = list.length ? list.map(t => {
+    const semC = { ROJO:'sr', AMARILLO:'sy', VERDE:'sg' }[t.semaforo] || 'sg';
+    const abierto = t.fecha_apertura ? Math.round((Date.now() - new Date(t.fecha_apertura)) / 60000) : 0;
+    const h = Math.floor(abierto/60), m = abierto % 60;
+    const tStr = t.estado==='CERRADO' ? `<span style="color:var(--vd2)">✓ ${h}h ${m}m</span>` : `<span style="color:${abierto>120?'var(--rj2)':abierto>60?'var(--am2)':'var(--vd2)'}">${h>0?h+'h ':''} ${m}m</span>`;
+    const fecha = t.fecha_apertura ? new Date(t.fecha_apertura).toLocaleDateString('es-CO') : '—';
+
+    let acciones = '';
+    if (t.estado === 'ABIERTO')
+      acciones = `<button class="btn btn-a btn-sm" onclick="openAsignar(${t.id})">Asignar</button>`;
+    else if (t.estado === 'EN_TRANSITO')
+      acciones = `<span style="color:#8b949e;font-size:10px">En camino</span>`;
+    else if (t.estado === 'EN_SITIO')
+      acciones = `<span style="color:var(--az2);font-size:10px">En sitio</span>`;
+    else
+      acciones = `<span style="color:#8b949e;font-size:10px">✓</span>`;
+
+    return `<tr>
+      <td><strong style="color:var(--az2);cursor:pointer" onclick="showTopo(${t.id})">#${t.slack_num||t.id}</strong></td>
+      <td style="font-size:11px;color:#8b949e">${fecha}</td>
+      <td>${t.site}<br><span style="font-size:10px;color:#8b949e">${t.torre||''}</span></td>
+      <td style="font-size:10px;color:#8b949e">${t.acc_nombre||'—'}<br>${t.acc_ip||'—'}</td>
+      <td>${t.tipo||'—'}</td>
+      <td style="font-weight:700;color:${t.afectados>=5?'var(--rj2)':'var(--am2)'}">${t.afectados}</td>
+      <td>${t.tecnico_nombre ? `<span style="color:var(--az2)">${t.tecnico_nombre}</span>` : '<span style="color:var(--rj2);font-weight:700">⚠ Sin asignar</span>'}</td>
+      <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span></td>
+      <td>${tStr}</td>
+      <td><span class="sem ${semC}"></span> <span style="font-size:10px;color:#8b949e">ev.${t.evento_num}</span></td>
+      <td style="white-space:nowrap">${acciones}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="11" class="empty">Sin tickets en el periodo seleccionado</td></tr>';
+}
+
+// ══════════════════════════════════════════
+// ASIGNACION
+// ══════════════════════════════════════════
+async function openAsignar(ticketId) {
+  curTicketId = ticketId;
+  const t = TICKETS_CACHE.find(x => x.id === ticketId);
+  if (!t) return;
+
+  document.getElementById('m-asignar-info').textContent =
+    `#${t.slack_num||t.id} — ${t.site} ${t.torre||''} | ${t.afectados} afectados | ${t.tipo}`;
+
+  // Historial del site
+  const reinc = TICKETS_CACHE.filter(x => x.site === t.site && x.torre === t.torre);
+  const semColor = { ROJO:'var(--rj2)', AMARILLO:'var(--am2)', VERDE:'var(--vd2)' }[t.semaforo] || 'var(--vd2)';
+  document.getElementById('m-asignar-hist').innerHTML =
+    `<strong style="color:var(--az2)">Historial: ${t.site} ${t.torre||''}</strong><br>
+     Eventos en periodo: <strong>${reinc.length}</strong> | Semáforo: <span style="color:${semColor}">${t.semaforo}</span><br>
+     ACC: ${t.acc_nombre||'—'} | ${t.acc_ip||'—'}
+     ${t.semaforo==='ROJO' ? '<br><strong style="color:var(--rj2)">⚠ Site crítico — llevar herramienta completa</strong>' : ''}`;
+
+  // Poblar select de técnicos
+  const sel = document.getElementById('m-tec-sel');
+  sel.innerHTML = '<option value="">-- Selecciona técnico --</option>' +
+    TECNICOS_ALL.filter(t => t.activo).map(t =>
+      `<option value="${t.id}">${t.nombre}${t.zona?' ('+t.zona+')':''} ${t.en_curso>0?'— EN CURSO':'— libre'}</option>`
+    ).join('');
+
+  document.getElementById('m-asignar-nota').value = '';
+  document.getElementById('m-asignar').classList.add('on');
+}
+
+async function confirmarAsignacion() {
+  const tecId = document.getElementById('m-tec-sel').value;
+  if (!tecId) { toast('Selecciona un técnico', 'err'); return; }
+  try {
+    await api(`/api/tickets/${curTicketId}/asignar`, {
+      method: 'PUT',
+      body: { tecnico_id: parseInt(tecId) }
+    });
+    closeModal('m-asignar');
+    toast('✅ Ticket asignado correctamente', 'ok');
+    loadTickets();
+    loadTecnicos();
+  } catch(e) { toast('Error: ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════
+// TOPOLOGÍA
+// ══════════════════════════════════════════
+function showTopo(id) {
+  const t = TICKETS_CACHE.find(x => x.id === id);
+  if (!t) return;
+  const ok = t.estado === 'CERRADO';
+  document.getElementById('topo-tit').textContent = `#${t.slack_num||t.id} — ${t.site} ${t.torre||''}`;
+  document.getElementById('topo-cont').innerHTML = `
+    <span class="topo-n" style="border-color:var(--vd2);color:var(--vd2)">🌐 Internet</span>
+    <span class="topo-arr">→</span>
+    <span class="topo-n" style="border-color:var(--az2);color:var(--az2)">EDGE<br><small>${t.edge_ip||'—'}</small></span>
+    <span class="topo-arr">→</span>
+    <span class="topo-n" style="border-color:var(--am2);color:var(--am2)">ACC<br><small>${t.acc_nombre||'—'}<br>${t.acc_ip||''}</small></span>
+    <span class="topo-arr">→</span>
+    <span class="topo-n" style="border-color:${ok?'var(--vd2)':'var(--rj2)'};color:${ok?'var(--vd2)':'var(--rj2)'}">
+      ${ok?'✅':'🔴'} SW ${t.modelo||''}<br><small>${ok?'Operativo':'Caído'}</small></span>
+    <span class="topo-arr">→</span>
+    <span style="font-size:11px;color:#8b949e">${t.afectados} usuarios</span>`;
+
+  const macs = t.macs || [];
+  document.getElementById('topo-macs').innerHTML = macs.length
+    ? '<strong style="color:#8b949e">MACs afectadas:</strong> ' + macs.map(m => `${m.mac} APT ${m.apt||'?'}`).join(' | ')
+    : '';
+
+  document.getElementById('topo-panel').style.display = 'block';
+  document.getElementById('topo-panel').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ══════════════════════════════════════════
+// NUEVO TICKET
+// ══════════════════════════════════════════
+async function parsearSlack() {
+  const raw = document.getElementById('slack-raw').value.trim();
+  if (!raw) { toast('Pega el mensaje de Slack primero', 'warn'); return; }
+
+  // Llamar al backend para parsear
+  try {
+    const res = await api('/api/tickets', {
+      method: 'POST',
+      body: { raw_mensaje: raw }
+    });
+    document.getElementById('parse-result').style.display = 'block';
+    document.getElementById('parse-result').textContent =
+      `✅ Ticket registrado: #${res.slack_num||res.id} — ${res.site} ${res.torre||''} | ${res.afectados} afectados`;
+    document.getElementById('slack-raw').value = '';
+    toast(`✅ Ticket #${res.slack_num||res.id} registrado desde Slack`, 'ok');
+    loadDashboard();
+  } catch(e) { toast('Error al parsear: ' + e.message, 'err'); }
+}
+
+async function registrarTicket() {
+  const site = document.getElementById('n-site').value.trim();
+  const torre = document.getElementById('n-torre').value.trim();
+  if (!site) { toast('El nombre del site es obligatorio', 'err'); return; }
+
+  const macsRaw = document.getElementById('n-macs').value;
+  const macs = macsRaw.split('\n').filter(Boolean).map(line => {
+    const mac = (line.match(/([0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2})/i)||[])[1];
+    const apt = (line.match(/APT\s*(\d+)/i)||[])[1];
+    return mac ? { mac, apt: apt || null } : null;
+  }).filter(Boolean);
+
+  try {
+    const res = await api('/api/tickets', {
+      method: 'POST',
+      body: {
+        slack_num:   document.getElementById('n-slack').value,
+        site,
+        torre:       torre || 'Torre 1',
+        acc_nombre:  document.getElementById('n-acc-nom').value,
+        acc_ip:      document.getElementById('n-acc-ip').value,
+        edge_nombre: document.getElementById('n-edge-nom').value,
+        edge_ip:     document.getElementById('n-edge-ip').value,
+        modelo:      document.getElementById('n-modelo').value,
+        tipo:        document.getElementById('n-tipo').value,
+        afectados:   parseInt(document.getElementById('n-afect').value) || 0,
+        observacion: document.getElementById('n-obs').value,
+        macs,
+        topologia_url: document.getElementById('n-topo').value,
+        ubicacion_url: document.getElementById('n-maps').value,
+        appointment_num: document.getElementById('n-appt').value,
+      }
+    });
+    toast(`✅ Ticket #${res.slack_num||res.id} registrado — ${res.semaforo}`, 'ok');
+    // Limpiar formulario
+    ['n-slack','n-site','n-torre','n-acc-nom','n-acc-ip','n-edge-nom','n-edge-ip',
+     'n-modelo','n-afect','n-obs','n-macs','n-topo','n-maps','n-appt'].forEach(id => {
+      const el = document.getElementById(id); if(el) el.value='';
+    });
+    goTab('tickets');
+  } catch(e) { toast('Error: ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════
+// REINCIDENCIAS
+// ══════════════════════════════════════════
+async function loadReinc() {
+  const params = new URLSearchParams();
+  if (F.rc.d) params.set('desde', F.rc.d);
+  if (F.rc.h) params.set('hasta', F.rc.h);
+  const tickets = await api('/api/tickets?' + params);
+
+  const rojo   = [...new Set(tickets.filter(t=>t.semaforo==='ROJO').map(t=>t.site+' '+(t.torre||'')))];
+  const amarill= [...new Set(tickets.filter(t=>t.semaforo==='AMARILLO').map(t=>t.site+' '+(t.torre||'')))];
+  const verde  = [...new Set(tickets.filter(t=>t.semaforo==='VERDE').map(t=>t.site+' '+(t.torre||'')))].filter(s=>!rojo.includes(s)&&!amarill.includes(s));
+
+  const mk = (title, col, items) =>
+    `<div class="panel"><div class="ph"><h3>${title}</h3><span class="badge">${items.length}</span></div>
+    <div class="tl">${items.length ? items.map((s,i) => {
+      const tks = tickets.filter(t => t.site+' '+(t.torre||'') === s);
+      return `<div class="tl-i"><div class="tl-l"><div class="tl-d" style="background:${col}"></div>${i<items.length-1?'<div class="tl-c"></div>':''}</div>
+        <div class="tl-b"><div class="tl-t">${s}</div><div class="tl-m">${tks.length} evento${tks.length>1?'s':''} | ${tks[0]?.acc_nombre||''}</div></div></div>`;
+    }).join('') : '<p class="empty">Sin sites en este nivel</p>'}</div></div>`;
+
+  document.getElementById('rc-panels').innerHTML =
+    mk('🔴 Sites CRÍTICOS','var(--rj2)',rojo) +
+    mk('🟡 Sites EN ALERTA','var(--am2)',amarill) +
+    mk('🟢 Sites ESTABLES','var(--vd2)',verde.slice(0,5));
+
+  const reinc = tickets.filter(t => t.es_reincidente);
+  document.getElementById('rc-badge').textContent = reinc.length;
+  document.getElementById('rc-tbody').innerHTML = reinc.length
+    ? reinc.map(t => {
+        const semC = {ROJO:'var(--rj2)',AMARILLO:'var(--am2)',VERDE:'var(--vd2)'}[t.semaforo]||'var(--vd2)';
+        return `<tr>
+          <td style="color:var(--az2)">#${t.slack_num||t.id}</td>
+          <td style="font-size:11px">${t.fecha_apertura?new Date(t.fecha_apertura).toLocaleDateString('es-CO'):'—'}</td>
+          <td>${t.site} / ${t.torre||''}</td>
+          <td style="font-weight:700">Evento #${t.evento_num}</td>
+          <td><span class="sem ${t.semaforo==='ROJO'?'sr':t.semaforo==='AMARILLO'?'sy':'sg'}"></span> <span style="color:${semC}">${t.semaforo}</span></td>
+          <td>${t.tecnico_nombre||'—'}</td>
+          <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span></td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="7" class="empty">Sin reincidencias en el periodo</td></tr>';
+}
+
+// ══════════════════════════════════════════
+// TÉCNICOS
+// ══════════════════════════════════════════
+async function loadTecnicos() {
+  TECNICOS_ALL = await api('/api/tecnicos');
+  document.getElementById('tec-badge').textContent = TECNICOS_ALL.length;
+  document.getElementById('tec-tbody').innerHTML = TECNICOS_ALL.map((t, i) =>
+    `<tr>
+      <td style="color:#8b949e">${i+1}</td>
+      <td><strong>${t.nombre}</strong></td>
+      <td style="color:#8b949e">${t.zona||'—'}</td>
+      <td style="font-size:11px">${t.telefono||'—'}</td>
+      <td style="font-size:11px;color:#8b949e">${t.slack_id||'—'}</td>
+      <td style="font-weight:700">${t.tickets_mes}</td>
+      <td>${t.en_curso>0?`<span style="color:var(--az2)">${t.en_curso} activo${t.en_curso>1?'s':''}</span>`:'<span style="color:#8b949e">—</span>'}</td>
+      <td><span style="color:${t.activo?'var(--vd2)':'var(--rj2)'}">${t.activo?'✅ Activo':'❌ Inactivo'}</span></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-g btn-sm" onclick="editarTecnico(${t.id})">✏️</button>
+        ${t.activo?`<button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="desactivarTecnico(${t.id},'${t.nombre}')">🗑</button>`:''}
+      </td>
+    </tr>`
+  ).join('');
+}
+
+async function crearTecnico() {
+  const nombre = document.getElementById('nt-nombre').value.trim();
+  if (!nombre) { toast('El nombre es obligatorio', 'err'); return; }
+  try {
+    await api('/api/tecnicos', {
+      method: 'POST',
+      body: {
+        nombre,
+        zona:     document.getElementById('nt-zona').value,
+        telefono: document.getElementById('nt-tel').value,
+        slack_id: document.getElementById('nt-slack').value,
+      }
+    });
+    closeModal('m-nuevo-tec');
+    toast(`✅ Técnico ${nombre} agregado`, 'ok');
+    ['nt-nombre','nt-tel','nt-slack'].forEach(id => document.getElementById(id).value='');
+    document.getElementById('nt-zona').value='';
+    loadTecnicos();
+  } catch(e) { toast('Error: ' + e.message, 'err'); }
+}
+
+function editarTecnico(id) {
+  const t = TECNICOS_ALL.find(x => x.id === id);
+  if (!t) return;
+  document.getElementById('et-id').value     = t.id;
+  document.getElementById('et-nombre').value = t.nombre;
+  document.getElementById('et-zona').value   = t.zona || '';
+  document.getElementById('et-tel').value    = t.telefono || '';
+  document.getElementById('et-slack').value  = t.slack_id || '';
+  document.getElementById('et-activo').value = String(t.activo);
+  document.getElementById('m-editar-tec').classList.add('on');
+}
+
+async function guardarTecnico() {
+  const id = document.getElementById('et-id').value;
+  const nombre = document.getElementById('et-nombre').value.trim();
+  if (!nombre) { toast('El nombre es obligatorio', 'err'); return; }
+  try {
+    await api(`/api/tecnicos/${id}`, {
+      method: 'PUT',
+      body: {
+        nombre,
+        zona:     document.getElementById('et-zona').value,
+        telefono: document.getElementById('et-tel').value,
+        slack_id: document.getElementById('et-slack').value,
+        activo:   document.getElementById('et-activo').value === 'true',
+      }
+    });
+    closeModal('m-editar-tec');
+    toast('✅ Técnico actualizado', 'ok');
+    loadTecnicos();
+  } catch(e) { toast('Error: ' + e.message, 'err'); }
+}
+
+async function desactivarTecnico(id, nombre) {
+  if (!confirm(`¿Desactivar al técnico ${nombre}? No podrá iniciar sesión.`)) return;
+  try {
+    await api(`/api/tecnicos/${id}`, { method: 'DELETE' });
+    toast(`Técnico ${nombre} desactivado`, 'warn');
+    loadTecnicos();
+  } catch(e) { toast('Error: ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════════
+function closeModal(id) {
+  document.getElementById(id).classList.remove('on');
+  if (id === 'm-asignar') curTicketId = null;
+}
+
+function toast(msg, type='ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = `toast ${type} show`;
+  setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+document.querySelectorAll('.overlay').forEach(el => {
+  el.addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('on');
+  });
+});
+
+// ══════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════
+async function init() {
+  // Fecha inicial: este mes
+  const r = (() => {
+    const H = fmtD(HOY);
+    return { d: fmtD(dAgo(30)), h: H };
+  })();
+  ['db','tk','rc'].forEach(ns => { F[ns].d = r.d; F[ns].h = r.h; });
+  [['db-d','db-h'],['tk-d','tk-h'],['rc-d','rc-h']].forEach(([d,h]) => {
+    const el0 = document.getElementById(d);
+    const el1 = document.getElementById(h);
+    if (el0) el0.value = r.d;
+    if (el1) el1.value = r.h;
+  });
+  document.getElementById('n-fecha').value = fmtD(HOY);
+
+  TECNICOS_ALL = await api('/api/tecnicos');
+  loadDashboard();
+
+  setInterval(() => {
+    document.getElementById('clock').textContent =
+      new Date().toLocaleTimeString('es-CO', { hour:'2-digit', minute:'2-digit' });
+  }, 1000);
+
+  // Auto-refresh cada 60 segundos en dashboard
+  setInterval(() => {
+    const active = document.querySelector('.tab.on')?.textContent;
+    if (active?.includes('Dashboard')) loadDashboard();
+    if (active?.includes('Tickets'))   loadTickets();
+  }, 60000);
+}
+
+init();
+</script>
+</body>
+</html>
