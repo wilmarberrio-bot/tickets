@@ -1,0 +1,23 @@
+# Variables de entorno — NUNCA subir
+.env
+.env.local
+
+# Base de datos SQLite local
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

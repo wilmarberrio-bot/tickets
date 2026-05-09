@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: torre-control-ftth
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --timeout 120
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: COORDINADOR_PIN
+        value: "1234"          # Cambia esto a tu PIN real
+      - key: WEBHOOK_TOKEN
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ftth-db
+          property: connectionString
+
+databases:
+  - name: ftth-db
+    databaseName: ftth_control
+    user: ftth_user
+    plan: free
