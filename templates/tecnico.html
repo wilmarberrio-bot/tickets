@@ -1,1 +1,510 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Torre de Control FTTH — Técnico</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
 
+<!-- HEADER -->
+<div class="hdr">
+  <div style="display:flex;align-items:center;gap:12px">
+    <div class="live"><div class="ld"></div>EN VIVO</div>
+    <h1>🔧 Panel Técnico</h1>
+  </div>
+  <div class="hdr-r">
+    <span style="color:var(--az2);font-weight:600">{{ tecnico.nombre }}</span>
+    {% if tecnico.zona %}<span>• {{ tecnico.zona }}</span>{% endif %}
+    <span id="clock">--:--</span>
+    <a href="/logout" style="color:#8b949e;text-decoration:none;font-size:11px">🚪 Salir</a>
+  </div>
+</div>
+
+<!-- TABS -->
+<div class="tabs">
+  <div class="tab on" onclick="goTab('mis-tickets')">🎫 Mis Tickets</div>
+  <div class="tab"    onclick="goTab('cerrar')">📋 Cerrar Ticket</div>
+  <div class="tab"    onclick="goTab('historial')">📂 Mi Historial</div>
+</div>
+
+<!-- ══════ MIS TICKETS ══════ -->
+<div id="tab-mis-tickets" class="tp on content">
+  <div id="alerta-tec" class="alert-strip rojo" style="display:none"></div>
+
+  <!-- KPIs del técnico -->
+  <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi red">   <div class="lbl">🔴 Pendientes</div>  <div class="val" id="t-pend">—</div><div class="sub">Sin cerrar</div></div>
+    <div class="kpi blue">  <div class="lbl">🔵 En Sitio</div>    <div class="val" id="t-sitio">—</div><div class="sub">Ahora mismo</div></div>
+    <div class="kpi green"> <div class="lbl">🟢 Cerrados hoy</div><div class="val" id="t-cerr">—</div><div class="sub">Completados</div></div>
+    <div class="kpi yellow"><div class="lbl">⏱ MTTR prom.</div>  <div class="val" id="t-mttr" style="font-size:20px">—</div><div class="sub">Meta &lt;2h</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="ph">
+      <h3>🎫 Tickets asignados a ti</h3>
+      <button class="btn btn-a btn-sm" onclick="loadMisTickets()">↺ Actualizar</button>
+    </div>
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th>Ticket</th><th>Site / Torre</th><th>ACC / IP</th>
+          <th>Falla</th><th>Afect.</th><th>Estado</th>
+          <th>⏱ Abierto</th><th>Reinc.</th><th>Acciones</th>
+        </tr></thead>
+        <tbody id="mis-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Detalle del ticket seleccionado -->
+  <div id="detalle-panel" class="panel" style="display:none">
+    <div class="ph">
+      <h3>📋 Detalle — <span id="det-titulo"></span></h3>
+      <button class="btn btn-g btn-sm" onclick="document.getElementById('detalle-panel').style.display='none'">✕</button>
+    </div>
+    <div style="padding:14px;display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div>
+        <p style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-bottom:6px">Información del ticket</p>
+        <div id="det-info" style="font-size:12px;line-height:1.8"></div>
+      </div>
+      <div>
+        <p style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-bottom:6px">Topología</p>
+        <div class="topo" id="det-topo" style="padding:0;flex-direction:column;align-items:flex-start;gap:4px"></div>
+        <div id="det-macs" style="margin-top:8px;font-size:11px;color:#8b949e"></div>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap" id="det-links"></div>
+      </div>
+    </div>
+    <div id="det-obs" style="padding:0 14px 14px;font-size:12px;color:#8b949e;display:none">
+      <strong style="color:#e6edf3">Observación:</strong><br>
+      <span id="det-obs-txt"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ CERRAR TICKET ══════ -->
+<div id="tab-cerrar" class="tp content">
+  <div class="panel">
+    <div class="ph"><h3>📋 Formulario de Cierre</h3><span class="badge" style="color:var(--rj2)">* Obligatorios</span></div>
+    <div style="padding:14px">
+
+      <!-- Solo muestra tickets asignados a este técnico -->
+      <div class="mf">
+        <label>Selecciona el ticket a cerrar *</label>
+        <select id="c-ticket" onchange="loadTicketCierre()">
+          <option value="">-- Solo ves tus tickets asignados --</option>
+        </select>
+      </div>
+      <div id="c-info" class="alert-strip verde" style="display:none"></div>
+
+      <div class="mrow">
+        <div class="mf"><label>Hora llegada al sitio *</label><input type="time" id="c-ll"></div>
+        <div class="mf"><label>Hora cierre *</label><input type="time" id="c-ch"></div>
+      </div>
+
+      <div class="mf"><label>Causa raíz del problema *</label>
+        <select id="c-causa">
+          <option value="">-- Selecciona la causa --</option>
+          <option>Desconexión física — patchcord</option>
+          <option>Falla eléctrica / UPS</option>
+          <option>Saturación de puertos</option>
+          <option>Error de configuración</option>
+          <option>Daño en fibra óptica</option>
+          <option>Falla en equipo (S600/310)</option>
+          <option>Mala manipulación previa</option>
+          <option>Intermitencia no resuelta</option>
+          <option>Conector sucio / oxidado</option>
+        </select></div>
+
+      <div class="mf"><label>Clasificación de la falla *</label>
+        <select id="c-cl">
+          <option value="">-- Clasifica el tipo de falla --</option>
+          <option>🔁 Falla repetitiva — ya ocurrió antes</option>
+          <option>⚠️ Posible daño masivo — puede afectar otros sites</option>
+          <option>⚡ Problema eléctrico — UPS, planta, corte</option>
+          <option>📊 Saturación — puertos o ancho de banda</option>
+          <option>🛠 Mala manipulación — alguien modificó mal</option>
+          <option>💥 Daño físico — cable, conector, chasis</option>
+          <option>〰️ Intermitencia — persiste o es esporádico</option>
+          <option>⚙️ Error de configuración — VLAN, puerto, etc.</option>
+        </select></div>
+
+      <div class="mf"><label>Acciones realizadas * (marca todas las que hiciste)</label>
+        <div class="check-grid">
+          <label class="ci"><input type="checkbox" name="acc" value="Cambio patchcord"> Patchcord</label>
+          <label class="ci"><input type="checkbox" name="acc" value="Cambio de puerto"> Cambio puerto</label>
+          <label class="ci"><input type="checkbox" name="acc" value="Reinicio de equipo"> Reinicio equipo</label>
+          <label class="ci"><input type="checkbox" name="acc" value="Intervención energía/UPS"> Energía/UPS</label>
+          <label class="ci"><input type="checkbox" name="acc" value="Limpieza de conectores"> Limpieza</label>
+          <label class="ci"><input type="checkbox" name="acc" value="Ajuste físico"> Ajuste físico</label>
+          <label class="ci"><input type="checkbox" name="acc" value="Reconfiguración lógica"> Reconfiguración</label>
+          <label class="ci"><input type="checkbox" name="acc" value="Medición OPM"> Medición OPM</label>
+          <label class="ci"><input type="checkbox" name="acc" value="Escalamiento"> Escalamiento</label>
+        </div></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="mf"><label>Estado ACC al cierre</label>
+          <select id="c-acc"><option>Online ✅</option><option>Offline ❌</option><option>Intermitente ⚠️</option></select></div>
+        <div class="mf"><label>Estado Edge al cierre</label>
+          <select id="c-edge"><option>Online ✅</option><option>Offline ❌</option><option>Sin verificar</option></select></div>
+        <div class="mf"><label>Estado Switch al cierre</label>
+          <select id="c-sw"><option>Operativo ✅</option><option>Escalado ❌</option><option>En monitoreo ⚠️</option></select></div>
+      </div>
+
+      <div class="mrow" style="margin-bottom:12px">
+        <div class="mf"><label>Potencia OPM (dBm)</label>
+          <input type="number" id="c-pot" placeholder="Ej: -22.4" step="0.1"></div>
+        <div class="mf"><label>Estado final *</label>
+          <select id="c-est">
+            <option value="">-- Selecciona --</option>
+            <option value="CERRADO">✅ Resuelto — usuarios con servicio</option>
+            <option value="ESCALADO">🔺 Escalado — requiere nivel superior</option>
+            <option value="EN_SITIO">⏳ En monitoreo — pendiente verificar</option>
+          </select></div>
+      </div>
+
+      <div class="mf" style="margin-bottom:12px">
+        <label>Solución aplicada * <span id="c-sn" style="float:right;color:#8b949e">0/50 mín.</span></label>
+        <textarea id="c-sol" rows="4" style="width:100%;background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#e6edf3;font-size:12px;outline:none;resize:vertical" placeholder="Describe paso a paso qué hiciste y cómo quedó el sistema. Sé específico: qué puerto, qué patchcord, qué configuración cambiaste, cómo verificaste que quedó OK..."></textarea>
+      </div>
+
+      <div class="mf" style="margin-bottom:6px"><label>Requiere escalamiento</label>
+        <select id="c-esc">
+          <option value="">No requiere</option>
+          <option>Nivel 2 — Soporte avanzado</option>
+          <option>Nivel 3 — Infraestructura</option>
+          <option>Cambio de equipo — logística</option>
+          <option>Intervención eléctrica</option>
+        </select></div>
+
+      <div class="mf" style="margin-bottom:6px">
+        <label class="ci" style="flex-direction:row;gap:8px;margin-bottom:8px">
+          <input type="checkbox" id="c-riesgo" style="width:15px;height:15px;accent-color:var(--am)">
+          <span style="font-size:12px;color:#e6edf3">Identifiqué un riesgo de falla futura</span>
+        </label>
+        <textarea id="c-riesgo-desc" rows="2" style="width:100%;background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#e6edf3;font-size:12px;outline:none;resize:vertical;display:none" placeholder="Describe el riesgo que identificaste..."></textarea>
+      </div>
+
+      <div class="mf" style="margin-bottom:16px"><label>Recomendación técnica</label>
+        <textarea id="c-rec" rows="2" style="width:100%;background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#e6edf3;font-size:12px;outline:none;resize:vertical" placeholder="¿Qué debería revisarse en una próxima visita programada?"></textarea></div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-c" onclick="submitCierre('CERRADO')" style="flex:1;padding:12px">✅ Cerrar Ticket</button>
+        <button class="btn btn-e" onclick="submitCierre('ESCALADO')" style="padding:12px 18px">🔺 Escalar</button>
+        <button class="btn btn-g" onclick="clearCierre()" style="padding:12px 18px">🗑 Limpiar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ HISTORIAL ══════ -->
+<div id="tab-historial" class="tp content">
+  <div class="panel">
+    <div class="ph"><h3>📂 Historial completo — {{ tecnico.nombre }}</h3><span class="badge" id="hist-badge">0 tickets</span></div>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Ticket</th><th>Site / Torre</th><th>Falla</th><th>Estado</th><th>Fecha apertura</th><th>MTTR</th><th>Reinc.</th></tr></thead>
+        <tbody id="hist-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════
+// Estado
+// ══════════════════════════════════════════
+let MIS_TICKETS = [];
+let curCierreId = null;
+
+// ── Tabs ──
+function goTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+  document.querySelectorAll('.tp').forEach(t => t.classList.remove('on'));
+  const idx = ['mis-tickets','cerrar','historial'].indexOf(name);
+  document.querySelectorAll('.tab')[idx]?.classList.add('on');
+  document.getElementById('tab-'+name)?.classList.add('on');
+  if (name==='mis-tickets') loadMisTickets();
+  if (name==='historial')   loadHistorial();
+}
+
+// ── API ──
+async function api(url, opts={}) {
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' }, ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Error del servidor' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ══════════════════════════════════════════
+// MIS TICKETS
+// ══════════════════════════════════════════
+async function loadMisTickets() {
+  MIS_TICKETS = await api('/api/tickets');
+  renderMisTickets();
+  updateCierreSelect();
+}
+
+function renderMisTickets() {
+  const activos   = MIS_TICKETS.filter(t => t.estado !== 'CERRADO' && t.estado !== 'ESCALADO');
+  const cerradosH = MIS_TICKETS.filter(t => {
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    return (t.estado==='CERRADO'||t.estado==='ESCALADO') &&
+           t.fecha_cierre && new Date(t.fecha_cierre) >= hoy;
+  });
+  const enSitio = MIS_TICKETS.filter(t => t.estado === 'EN_SITIO');
+
+  document.getElementById('t-pend').textContent  = activos.length;
+  document.getElementById('t-sitio').textContent = enSitio.length;
+  document.getElementById('t-cerr').textContent  = cerradosH.length;
+
+  const mttrs = MIS_TICKETS.filter(t => t.mttr_minutos).map(t => t.mttr_minutos);
+  if (mttrs.length) {
+    const avg = Math.round(mttrs.reduce((a,b)=>a+b,0)/mttrs.length);
+    const h = Math.floor(avg/60), m = avg%60;
+    document.getElementById('t-mttr').textContent = `${h}h ${m}m`;
+  } else {
+    document.getElementById('t-mttr').textContent = '--';
+  }
+
+  const alertEl = document.getElementById('alerta-tec');
+  if (activos.length > 0) {
+    alertEl.style.display = 'flex';
+    alertEl.innerHTML = `⚠️ Tienes <strong>${activos.length} ticket${activos.length>1?'s':''} activo${activos.length>1?'s':''}</strong> sin cerrar.`;
+  } else {
+    alertEl.style.display = 'none';
+  }
+
+  document.getElementById('mis-tbody').innerHTML = MIS_TICKETS.length
+    ? MIS_TICKETS.map(t => {
+        const abierto = t.fecha_apertura ? Math.round((Date.now()-new Date(t.fecha_apertura))/60000) : 0;
+        const h = Math.floor(abierto/60), m = abierto%60;
+        const tStr = t.estado==='CERRADO' ? `<span style="color:var(--vd2)">✓ ${t.mttr_minutos?Math.floor(t.mttr_minutos/60)+'h '+t.mttr_minutos%60+'m':'—'}</span>`
+          : `<span style="color:${abierto>120?'var(--rj2)':abierto>60?'var(--am2)':'var(--vd2)'}">${h>0?h+'h ':''} ${m}m</span>`;
+        const semC = {ROJO:'sr',AMARILLO:'sy',VERDE:'sg'}[t.semaforo]||'sg';
+
+        let accs = '';
+        if (t.estado==='EN_TRANSITO')
+          accs = `<button class="btn btn-a btn-sm" onclick="marcarEnSitio(${t.id})">📍 Llegué al sitio</button>`;
+        else if (t.estado==='EN_SITIO')
+          accs = `<button class="btn btn-c btn-sm" onclick="irACierre(${t.id})">📋 Cerrar</button>`;
+        else if (t.estado==='ABIERTO')
+          accs = `<span style="color:var(--am2);font-size:10px">⏳ Esperando confirmación</span>`;
+        else
+          accs = `<span style="color:#8b949e;font-size:10px">✓ ${t.estado}</span>`;
+
+        return `<tr>
+          <td><strong style="color:var(--az2);cursor:pointer" onclick="verDetalle(${t.id})">#${t.slack_num||t.id}</strong></td>
+          <td>${t.site}<br><span style="font-size:10px;color:#8b949e">${t.torre||''}</span></td>
+          <td style="font-size:10px;color:#8b949e">${t.acc_nombre||'—'}<br>${t.acc_ip||'—'}</td>
+          <td>${t.tipo||'—'}</td>
+          <td style="font-weight:700;color:${t.afectados>=5?'var(--rj2)':'var(--am2)'}">${t.afectados}</td>
+          <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span></td>
+          <td>${tStr}</td>
+          <td><span class="sem ${semC}"></span> <span style="font-size:10px;color:#8b949e">${t.es_reincidente?'⚠ Reinc.':'OK'}</span></td>
+          <td style="white-space:nowrap">${accs}</td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="9" class="empty">No tienes tickets asignados actualmente</td></tr>';
+}
+
+async function marcarEnSitio(id) {
+  try {
+    await api(`/api/tickets/${id}/en-sitio`, { method: 'PUT' });
+    toast('✅ Marcaste tu llegada al sitio', 'ok');
+    loadMisTickets();
+  } catch(e) { toast('Error: '+e.message, 'err'); }
+}
+
+function irACierre(id) {
+  goTab('cerrar');
+  const sel = document.getElementById('c-ticket');
+  sel.value = id;
+  loadTicketCierre();
+}
+
+function verDetalle(id) {
+  const t = MIS_TICKETS.find(x => x.id === id);
+  if (!t) return;
+  document.getElementById('det-titulo').textContent = `#${t.slack_num||t.id} — ${t.site} ${t.torre||''}`;
+  document.getElementById('det-info').innerHTML = `
+    <strong>Site:</strong> ${t.site}<br>
+    <strong>Torre:</strong> ${t.torre||'—'}<br>
+    <strong>Tipo:</strong> ${t.tipo||'—'}<br>
+    <strong>Afectados:</strong> <span style="color:var(--rj2)">${t.afectados}</span><br>
+    <strong>Modelo:</strong> ${t.modelo||'—'}<br>
+    <strong>Estado:</strong> <span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span><br>
+    ${t.appointment_num ? `<strong>Appointment:</strong> #${t.appointment_num}<br>` : ''}
+    ${t.es_reincidente ? '<strong style="color:var(--rj2)">⚠ Site reincidente</strong><br>' : ''}
+  `;
+  const ok = t.estado === 'CERRADO';
+  document.getElementById('det-topo').innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span class="topo-n" style="border-color:var(--vd2);color:var(--vd2)">Internet</span>
+      <span style="color:var(--g2)">→</span>
+      <span class="topo-n" style="border-color:var(--az2);color:var(--az2)">EDGE<br><small>${t.edge_ip||'—'}</small></span>
+      <span style="color:var(--g2)">→</span>
+      <span class="topo-n" style="border-color:var(--am2);color:var(--am2)">ACC<br><small>${t.acc_ip||'—'}</small></span>
+      <span style="color:var(--g2)">→</span>
+      <span class="topo-n" style="border-color:${ok?'var(--vd2)':'var(--rj2)'};color:${ok?'var(--vd2)':'var(--rj2)'}">SW ${t.modelo||''}</span>
+    </div>`;
+  const macs = t.macs || [];
+  document.getElementById('det-macs').innerHTML = macs.length
+    ? '<strong>MACs:</strong> ' + macs.map(m => `${m.mac} APT ${m.apt||'?'}`).join(' | ') : '';
+
+  const links = [];
+  if (t.topologia_url) links.push(`<a href="${t.topologia_url}" target="_blank" class="btn btn-g btn-sm">🔗 Topología Drive</a>`);
+  if (t.ubicacion_url) links.push(`<a href="${t.ubicacion_url}" target="_blank" class="btn btn-g btn-sm">📍 Ver en Maps</a>`);
+  document.getElementById('det-links').innerHTML = links.join('');
+
+  const obsEl = document.getElementById('det-obs');
+  if (t.observacion) {
+    obsEl.style.display = 'block';
+    document.getElementById('det-obs-txt').textContent = t.observacion;
+  } else { obsEl.style.display = 'none'; }
+
+  document.getElementById('detalle-panel').style.display = 'block';
+  document.getElementById('detalle-panel').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ══════════════════════════════════════════
+// CERRAR TICKET
+// ══════════════════════════════════════════
+function updateCierreSelect() {
+  const sel = document.getElementById('c-ticket');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">-- Selecciona el ticket a cerrar --</option>';
+  MIS_TICKETS.filter(t => t.estado === 'EN_SITIO' || t.estado === 'EN_TRANSITO').forEach(t => {
+    const opt = new Option(`#${t.slack_num||t.id} — ${t.site} ${t.torre||''} (${t.estado.replace('_',' ')})`, t.id);
+    sel.add(opt);
+  });
+  if (cur) sel.value = cur;
+}
+
+function loadTicketCierre() {
+  const id = parseInt(document.getElementById('c-ticket').value);
+  const t = MIS_TICKETS.find(x => x.id === id);
+  const el = document.getElementById('c-info');
+  if (!t) { el.style.display = 'none'; curCierreId = null; return; }
+
+  curCierreId = id;
+  el.style.display = 'flex';
+  el.innerHTML = `<strong style="color:var(--az2)">#${t.slack_num||t.id}</strong>&nbsp;—&nbsp;${t.site} ${t.torre||''}&nbsp;|&nbsp;
+    <span style="color:var(--am2)">${t.tipo}</span>&nbsp;|&nbsp;${t.afectados} afectados
+    ${t.es_reincidente ? '&nbsp;|&nbsp;<strong style="color:var(--rj2)">⚠ Reincidente</strong>' : ''}`;
+}
+
+document.getElementById('c-sol').addEventListener('input', function() {
+  const n = document.getElementById('c-sn');
+  n.textContent = `${this.value.length}/50 mín.`;
+  n.style.color = this.value.length >= 50 ? 'var(--vd2)' : '#8b949e';
+});
+
+document.getElementById('c-riesgo').addEventListener('change', function() {
+  document.getElementById('c-riesgo-desc').style.display = this.checked ? 'block' : 'none';
+});
+
+async function submitCierre(estadoFinal) {
+  if (!curCierreId) { toast('Selecciona el ticket a cerrar', 'err'); return; }
+
+  const causa   = document.getElementById('c-causa').value;
+  const clasif  = document.getElementById('c-cl').value;
+  const sol     = document.getElementById('c-sol').value;
+  const estFin  = document.getElementById('c-est').value || estadoFinal;
+  const acciones= [...document.querySelectorAll('input[name="acc"]:checked')].map(x => x.value);
+
+  if (!causa)          { toast('Selecciona la causa raíz', 'err'); return; }
+  if (!clasif)         { toast('Selecciona la clasificación de falla', 'err'); return; }
+  if (!acciones.length){ toast('Marca al menos una acción realizada', 'err'); return; }
+  if (sol.length < 50) { toast('La solución debe tener mínimo 50 caracteres', 'warn'); return; }
+
+  try {
+    await api(`/api/tickets/${curCierreId}/cerrar`, {
+      method: 'POST',
+      body: {
+        causa_raiz:    causa,
+        clasificacion: clasif,
+        acciones,
+        estado_acc:    document.getElementById('c-acc').value,
+        estado_edge:   document.getElementById('c-edge').value,
+        estado_switch: document.getElementById('c-sw').value,
+        potencia_dbm:  parseFloat(document.getElementById('c-pot').value) || null,
+        solucion:      sol,
+        estado_final:  estFin,
+        escalamiento:  document.getElementById('c-esc').value || null,
+        riesgo:        document.getElementById('c-riesgo').checked,
+        desc_riesgo:   document.getElementById('c-riesgo-desc').value,
+        recomendacion: document.getElementById('c-rec').value,
+      }
+    });
+    clearCierre();
+    toast(`${estFin==='CERRADO'?'✅':'🔺'} Ticket ${estFin.toLowerCase()} correctamente`, 'ok');
+    loadMisTickets();
+    goTab('mis-tickets');
+  } catch(e) { toast('Error: ' + e.message, 'err'); }
+}
+
+function clearCierre() {
+  ['c-ticket','c-causa','c-cl','c-est','c-esc'].forEach(id => document.getElementById(id).value='');
+  ['c-sol','c-rec','c-riesgo-desc'].forEach(id => document.getElementById(id).value='');
+  ['c-ll','c-ch','c-pot'].forEach(id => document.getElementById(id).value='');
+  document.querySelectorAll('input[name="acc"]').forEach(x => x.checked=false);
+  document.getElementById('c-riesgo').checked = false;
+  document.getElementById('c-riesgo-desc').style.display = 'none';
+  document.getElementById('c-info').style.display = 'none';
+  document.getElementById('c-sn').textContent = '0/50 mín.';
+  curCierreId = null;
+}
+
+// ══════════════════════════════════════════
+// HISTORIAL
+// ══════════════════════════════════════════
+async function loadHistorial() {
+  const todos = await api('/api/tickets');
+  document.getElementById('hist-badge').textContent = `${todos.length} tickets`;
+  document.getElementById('hist-tbody').innerHTML = todos.length
+    ? todos.map(t => {
+        const mttr = t.mttr_minutos ? `${Math.floor(t.mttr_minutos/60)}h ${t.mttr_minutos%60}m` : '—';
+        return `<tr>
+          <td style="color:var(--az2)">#${t.slack_num||t.id}</td>
+          <td>${t.site}<br><span style="font-size:10px;color:#8b949e">${t.torre||''}</span></td>
+          <td>${t.tipo||'—'}</td>
+          <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span></td>
+          <td style="font-size:11px;color:#8b949e">${t.fecha_apertura?new Date(t.fecha_apertura).toLocaleDateString('es-CO'):'—'}</td>
+          <td>${mttr}</td>
+          <td><span class="sem ${t.semaforo==='ROJO'?'sr':t.semaforo==='AMARILLO'?'sy':'sg'}"></span> ${t.es_reincidente?'<span style="font-size:10px;color:var(--rj2)">Reinc.</span>':'<span style="font-size:10px;color:#8b949e">OK</span>'}</td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="7" class="empty">Sin historial todavía</td></tr>';
+}
+
+// ══════════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════════
+function toast(msg, type='ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = `toast ${type} show`;
+  setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+async function init() {
+  await loadMisTickets();
+  setInterval(() => {
+    document.getElementById('clock').textContent =
+      new Date().toLocaleTimeString('es-CO', { hour:'2-digit', minute:'2-digit' });
+  }, 1000);
+  setInterval(loadMisTickets, 60000);
+}
+
+init();
+</script>
+</body>
+</html>
