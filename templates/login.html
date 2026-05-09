@@ -1,1 +1,81 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Torre de Control FTTH — Acceso</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:36px;width:420px;max-width:95vw}
+h1{font-size:20px;font-weight:700;color:#58a6ff;margin-bottom:4px;text-align:center}
+.sub{font-size:12px;color:#8b949e;text-align:center;margin-bottom:28px}
+.tabs{display:flex;gap:0;border:1px solid #30363d;border-radius:8px;overflow:hidden;margin-bottom:24px}
+.tab{flex:1;padding:10px;text-align:center;cursor:pointer;font-size:13px;font-weight:600;color:#8b949e;background:#21262d;transition:all .2s}
+.tab.on{background:#1f6feb;color:#fff}
+.tab:first-child{border-right:1px solid #30363d}
+.panel{display:none}.panel.on{display:block}
+label{display:block;font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;margin-top:14px}
+input,select{width:100%;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:9px 12px;color:#e6edf3;font-size:13px;outline:none;transition:border .15s}
+input:focus,select:focus{border-color:#58a6ff}
+.btn{width:100%;padding:11px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:700;margin-top:18px;transition:all .15s}
+.btn-coord{background:#1f6feb;color:#fff}.btn-coord:hover{background:#1a5fd6}
+.btn-tec{background:#238636;color:#fff}.btn-tec:hover{background:#1a6628}
+.error{background:#2d1b1b;border:1px solid #f85149;border-radius:6px;padding:8px 12px;font-size:12px;color:#f85149;margin-top:12px}
+.logo{text-align:center;font-size:36px;margin-bottom:16px}
+.hint{font-size:11px;color:#8b949e;text-align:center;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">🛰</div>
+  <h1>Torre de Control FTTH</h1>
+  <p class="sub">Somos Internet — Sistema de Trazabilidad Operativa</p>
 
+  <div class="tabs">
+    <div class="tab on" onclick="switchTab('coordinador',this)">👔 Coordinador</div>
+    <div class="tab"    onclick="switchTab('tecnico',this)">🔧 Técnico</div>
+  </div>
+
+  <!-- Panel Coordinador -->
+  <div id="p-coordinador" class="panel on">
+    <form method="POST" action="/login">
+      <input type="hidden" name="rol" value="coordinador">
+      <label>PIN de acceso</label>
+      <input type="password" name="pin" placeholder="••••" autocomplete="current-password" required>
+      <button type="submit" class="btn btn-coord">Entrar como Coordinador →</button>
+      <p class="hint">Solo para coordinadores y supervisores de turno</p>
+    </form>
+  </div>
+
+  <!-- Panel Técnico -->
+  <div id="p-tecnico" class="panel">
+    <form method="POST" action="/login">
+      <input type="hidden" name="rol" value="tecnico">
+      <label>¿Quién eres?</label>
+      <select name="tecnico_id" required>
+        <option value="">-- Selecciona tu nombre --</option>
+        {% for tec in tecnicos %}
+        <option value="{{ tec.id }}">{{ tec.nombre }} {% if tec.zona %}({{ tec.zona }}){% endif %}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-tec">Entrar como Técnico →</button>
+      <p class="hint">Solo verás los tickets asignados a ti</p>
+    </form>
+  </div>
+
+  {% if error %}
+  <div class="error">⚠ {{ error }}</div>
+  {% endif %}
+</div>
+
+<script>
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('p-' + name).classList.add('on');
+}
+</script>
+</body>
+</html>
