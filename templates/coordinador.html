@@ -576,8 +576,10 @@ function showTopo(id) {
 
   const macs = t.macs || [];
   document.getElementById('topo-macs').innerHTML = macs.length
-    ? '<strong style="color:#8b949e">MACs afectadas:</strong> ' + macs.map(m => `${m.mac} APT ${m.apt||'?'}`).join(' | ')
-    : '';
+  ? '<strong style="color:#8b949e">Usuarios / MACs afectados:</strong> ' + macs.map(m =>
+      m.apt ? `${m.mac} APT ${m.apt}` : `${m.mac}`
+    ).join(' | ')
+  : '';
 
   document.getElementById('topo-panel').style.display = 'block';
   document.getElementById('topo-panel').scrollIntoView({ behavior: 'smooth' });
@@ -588,65 +590,154 @@ function showTopo(id) {
 // ══════════════════════════════════════════
 async function parsearSlack() {
   const raw = document.getElementById('slack-raw').value.trim();
-  if (!raw) { toast('Pega el mensaje de Slack primero', 'warn'); return; }
+  if (!raw) {
+    toast('Pega el mensaje de Slack primero', 'warn');
+    return;
+  }
 
-  // Llamar al backend para parsear
   try {
-    const res = await api('/api/tickets', {
+    const res = await api('/api/parse-slack', {
       method: 'POST',
       body: { raw_mensaje: raw }
     });
+
+    document.getElementById('n-slack').value = res.slack_num || '';
+    document.getElementById('n-site').value = res.site || '';
+    document.getElementById('n-torre').value = res.torre || '';
+    document.getElementById('n-modelo').value = res.modelo || '';
+
+    document.getElementById('n-acc-nom').value = res.acc_nombre || '';
+    document.getElementById('n-acc-ip').value = res.acc_ip || '';
+    document.getElementById('n-edge-nom').value = res.edge_nombre || '';
+    document.getElementById('n-edge-ip').value = res.edge_ip || '';
+
+    document.getElementById('n-afect').value = res.afectados || 0;
+    document.getElementById('n-tipo').value = res.tipo || 'Ausencia de Servicio';
+    document.getElementById('n-obs').value = res.observacion || '';
+    document.getElementById('n-topo').value = res.topologia_url || '';
+    document.getElementById('n-maps').value = res.ubicacion_url || '';
+    document.getElementById('n-appt').value = res.appointment_num || '';
+
+    if (res.macs && res.macs.length) {
+      document.getElementById('n-macs').value = res.macs
+        .map(m => m.apt ? `${m.mac} APT ${m.apt}` : m.mac)
+        .join('\n');
+    } else {
+      document.getElementById('n-macs').value = '';
+    }
+
     document.getElementById('parse-result').style.display = 'block';
     document.getElementById('parse-result').textContent =
-      `✅ Ticket registrado: #${res.slack_num||res.id} — ${res.site} ${res.torre||''} | ${res.afectados} afectados`;
-    document.getElementById('slack-raw').value = '';
-    toast(`✅ Ticket #${res.slack_num||res.id} registrado desde Slack`, 'ok');
-    loadDashboard();
-  } catch(e) { toast('Error al parsear: ' + e.message, 'err'); }
+      `✅ Formulario llenado: #${res.slack_num || ''} — ${res.site || ''} ${res.torre || ''} | ${res.afectados || 0} afectados`;
+
+    toast('✅ Formulario llenado desde Slack', 'ok');
+
+  } catch(e) {
+    toast('Error al parsear: ' + e.message, 'err');
+  }
 }
+
 
 async function registrarTicket() {
   const site = document.getElementById('n-site').value.trim();
   const torre = document.getElementById('n-torre').value.trim();
-  if (!site) { toast('El nombre del site es obligatorio', 'err'); return; }
+
+  if (!site) {
+    toast('El nombre del site es obligatorio', 'err');
+    return;
+  }
 
   const macsRaw = document.getElementById('n-macs').value;
+
   const macs = macsRaw.split('\n').filter(Boolean).map(line => {
-    const mac = (line.match(/([0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2})/i)||[])[1];
-    const apt = (line.match(/APT\s*(\d+)/i)||[])[1];
-    return mac ? { mac, apt: apt || null } : null;
+    line = line.trim();
+
+    const mac = (
+      line.match(/([0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2})/i) || []
+    )[1];
+
+    const apt = (
+      line.match(/APT\s*([A-Za-z0-9\-]+)/i) || []
+    )[1];
+
+    if (mac) {
+      return {
+        mac,
+        apt: apt || null
+      };
+    }
+
+    if (/^SOMOS-/i.test(line)) {
+      return {
+        mac: line,
+        apt: null
+      };
+    }
+
+    return null;
   }).filter(Boolean);
 
   try {
     const res = await api('/api/tickets', {
       method: 'POST',
       body: {
-        slack_num:   document.getElementById('n-slack').value,
+        slack_num: document.getElementById('n-slack').value,
         site,
-        torre:       torre || 'Torre 1',
-        acc_nombre:  document.getElementById('n-acc-nom').value,
-        acc_ip:      document.getElementById('n-acc-ip').value,
+        torre: torre || 'Torre 1',
+
+        acc_nombre: document.getElementById('n-acc-nom').value,
+        acc_ip: document.getElementById('n-acc-ip').value,
+
         edge_nombre: document.getElementById('n-edge-nom').value,
-        edge_ip:     document.getElementById('n-edge-ip').value,
-        modelo:      document.getElementById('n-modelo').value,
-        tipo:        document.getElementById('n-tipo').value,
-        afectados:   parseInt(document.getElementById('n-afect').value) || 0,
+        edge_ip: document.getElementById('n-edge-ip').value,
+
+        modelo: document.getElementById('n-modelo').value,
+        tipo: document.getElementById('n-tipo').value,
+
+        afectados: parseInt(document.getElementById('n-afect').value) || 0,
         observacion: document.getElementById('n-obs').value,
+
         macs,
+
         topologia_url: document.getElementById('n-topo').value,
         ubicacion_url: document.getElementById('n-maps').value,
-        appointment_num: document.getElementById('n-appt').value,
+        appointment_num: document.getElementById('n-appt').value
       }
     });
-    toast(`✅ Ticket #${res.slack_num||res.id} registrado — ${res.semaforo}`, 'ok');
-    // Limpiar formulario
-    ['n-slack','n-site','n-torre','n-acc-nom','n-acc-ip','n-edge-nom','n-edge-ip',
-     'n-modelo','n-afect','n-obs','n-macs','n-topo','n-maps','n-appt'].forEach(id => {
-      const el = document.getElementById(id); if(el) el.value='';
+
+    toast(`✅ Ticket #${res.slack_num || res.id} registrado — ${res.semaforo}`, 'ok');
+
+    [
+      'n-slack',
+      'n-site',
+      'n-torre',
+      'n-acc-nom',
+      'n-acc-ip',
+      'n-edge-nom',
+      'n-edge-ip',
+      'n-modelo',
+      'n-afect',
+      'n-obs',
+      'n-macs',
+      'n-topo',
+      'n-maps',
+      'n-appt'
+    ].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
     });
+
+    document.getElementById('parse-result').style.display = 'none';
+    document.getElementById('parse-result').textContent = '';
+
     goTab('tickets');
-  } catch(e) { toast('Error: ' + e.message, 'err'); }
+
+  } catch (e) {
+    toast('Error: ' + e.message, 'err');
+  }
 }
+
+
 
 // ══════════════════════════════════════════
 // REINCIDENCIAS
