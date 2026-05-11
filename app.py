@@ -215,102 +215,160 @@ def evaluar_reincidencia(ticket):
 
 
 def parse_slack_message(texto):
-    """Parsea un mensaje de Slack con formato de ticket FTTH."""
+    """Parsea mensajes reales de Slack con formato de ticket FTTH."""
     data = {}
+
+    texto = texto.replace('\xa0', ' ')
+    texto = re.sub(r'\r\n?', '\n', texto)
     lines = [l.strip() for l in texto.split('\n') if l.strip()]
 
+    collecting_obs = False
+    obs_lines = []
+    collecting_affected = False
+
     for i, line in enumerate(lines):
-        # Ticket number
-        m = re.search(r'Ticket\s*#?(\d+)', line, re.I)
-        if m: data['slack_num'] = m.group(1)
+        clean = line.strip()
+        low = clean.lower()
 
-        # Edge nombre + IP en misma línea
-        m = re.search(r'Edge/ACC\s+(COL_\S+)\s+-\s+([\d.]+)', line, re.I)
+        # Detener captura de observación al llegar a otras secciones
+        if re.match(r'^(topolog[ií]a|ubicaci[oó]n|afectados:?|users:?|usuarios:?|usuario:?|t[eé]cnico:?|@)', clean, re.I):
+            collecting_obs = False
+
+        if collecting_obs:
+            obs_lines.append(clean)
+
+        # Detener captura de usuarios afectados al llegar a otras secciones
+        if re.match(r'^(topolog[ií]a|ubicaci[oó]n|observaci[oó]n|tipo de problema|modelo equipo|nombre del sitio|torre\b|edge/acc|#\s*ticket|ticket\b)', clean, re.I):
+            collecting_affected = False
+
+        # Inicio de bloque de afectados/users
+        if re.match(r'^(afectados:?|users:?|usuarios:?)$', clean, re.I):
+            collecting_affected = True
+            continue
+
+        # Usuarios afectados tipo SOMOS o MACs
+        if collecting_affected and (
+            re.match(r'^SOMOS-', clean, re.I) or
+            re.search(r'[0-9a-f]{2}(:[0-9a-f]{2}){5}', clean, re.I)
+        ):
+            data.setdefault('macs', [])
+
+            mmac = re.search(r'([0-9a-f]{2}(?::[0-9a-f]{2}){5})', clean, re.I)
+            if mmac:
+                apt = re.search(r'APT\s*([A-Za-z0-9\-]+)', clean, re.I)
+                data['macs'].append({
+                    'mac': mmac.group(1),
+                    'apt': apt.group(1) if apt else None
+                })
+            else:
+                data['macs'].append({
+                    'mac': clean,
+                    'apt': None
+                })
+
+        # Ticket
+        m = re.search(r'Ticket\s*#?\s*(\d+)', clean, re.I)
         if m:
-            data['edge_nombre'] = m.group(1)
-            data['edge_ip']     = m.group(2)
-            # Siguiente línea puede tener ACC
+            data['slack_num'] = m.group(1)
+
+        # Edge/ACC principal
+        m = re.search(r'Edge/ACC\s+(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', clean, re.I)
+        if m:
+            nombre = m.group(1).strip()
+            ip = m.group(2).strip()
+
+            if 'ACC' in nombre.upper():
+                data['acc_nombre'] = nombre
+                data['acc_ip'] = ip
+            else:
+                data['edge_nombre'] = nombre
+                data['edge_ip'] = ip
+
+            # Siguiente línea puede traer ACC o EDGE adicional
             if i + 1 < len(lines):
-                m2 = re.search(r'^(COL_\S+ACC\S*)\s+-\s+([\d.]+)', lines[i+1])
+                nxt = lines[i + 1].strip()
+                m2 = re.search(r'^(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', nxt, re.I)
                 if m2:
-                    data['acc_nombre'] = m2.group(1)
-                    data['acc_ip']     = m2.group(2)
+                    nombre2 = m2.group(1).strip()
+                    ip2 = m2.group(2).strip()
 
-        # Solo Edge
-        m = re.search(r'^(COL_\S+EDGE\S*)\s+-\s+([\d.]+)', line, re.I)
-        if m and 'edge_nombre' not in data:
-            data['edge_nombre'] = m.group(1)
-            data['edge_ip']     = m.group(2)
+                    if 'ACC' in nombre2.upper():
+                        data['acc_nombre'] = nombre2
+                        data['acc_ip'] = ip2
+                    elif 'EDGE' in nombre2.upper():
+                        data['edge_nombre'] = nombre2
+                        data['edge_ip'] = ip2
 
-        # Solo ACC
-        m = re.search(r'^(COL_\S+ACC\S*)\s+-\s+([\d.]+)', line, re.I)
-        if m and 'acc_nombre' not in data:
-            data['acc_nombre'] = m.group(1)
-            data['acc_ip']     = m.group(2)
+        # Línea suelta ACC o EDGE
+        m = re.search(r'^(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', clean, re.I)
+        if m:
+            nombre = m.group(1).strip()
+            ip = m.group(2).strip()
+
+            if 'ACC' in nombre.upper():
+                data['acc_nombre'] = nombre
+                data['acc_ip'] = ip
+            elif 'EDGE' in nombre.upper():
+                data['edge_nombre'] = nombre
+                data['edge_ip'] = ip
 
         # Nombre del sitio
-        if re.search(r'nombre del sitio', line, re.I):
-            next_line = lines[i+1] if i+1 < len(lines) else ''
-            # Puede estar en la misma línea después de ":"
-            m = re.search(r'nombre del sitio:?\s*(.+)', line, re.I)
-            if m and m.group(1).strip():
-                data['site'] = m.group(1).strip()
-            elif next_line and not re.match(r'^(Torre|Modelo|#)', next_line, re.I):
-                data['site'] = next_line
+        m = re.search(r'Nombre\s+del\s+sitio\s*:?-?\s*(.+)', clean, re.I)
+        if m:
+            data['site'] = m.group(1).strip()
 
         # Torre
-        m = re.search(r'Torre\s+(\d+)', line, re.I)
-        if m: data['torre'] = f"Torre {m.group(1)}"
+        m = re.search(r'\bTorre\s*:?-?\s*([A-Za-z0-9\-]+)', clean, re.I)
+        if m:
+            data['torre'] = f"Torre {m.group(1).strip()}"
 
-        # Modelo
-        if re.search(r'modelo\s+equipo', line, re.I):
-            nxt = lines[i+1] if i+1 < len(lines) else ''
-            if nxt and len(nxt) < 20: data['modelo'] = nxt
+        # Modelo equipo
+        m = re.search(r'Modelo\s+equipo\s*:?-?\s*(.+)', clean, re.I)
+        if m:
+            data['modelo'] = m.group(1).strip()
 
         # Afectados
-       if re.search(r'#\s*afectados', line, re.I) and 'afectados' not in data:
-            m = re.search(r'#\s*[Aa]fectados\s*:?\s*(\d+)', line)
-            if m:
-                data['afectados'] = int(m.group(1))
-            else:
-                nxt = lines[i+1] if i+1 < len(lines) else ''
-                m2 = re.search(r'(\d+)', nxt)
-                if m2: data['afectados'] = int(m2.group(1))
+        m = re.search(r'#\s*Afectados\s*:?-?\s*(\d+)', clean, re.I)
+        if m:
+            data['afectados'] = int(m.group(1))
 
         # Tipo de problema
-    if re.search(r'tipo de problema', line, re.I) and 'tipo' not in data:
-            m = re.search(r'[Tt]ipo\s+de\s+[Pp]roblema:?\s*(.+)', line)
-            if m and m.group(1).strip():
-                data['tipo'] = m.group(1).strip()
-            else:
-                nxt = lines[i+1] if i+1 < len(lines) else ''
-                if nxt and len(nxt) < 60:
-                    data['tipo'] = nxt
-
-        # MACs
-        m = re.search(r'([0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2})', line, re.I)
+        m = re.search(r'Tipo\s+de\s+Problema\s*:?-?\s*(.+)', clean, re.I)
         if m:
-            apt = re.search(r'APT\s*(\d+)', line, re.I)
-            if 'macs' not in data: data['macs'] = []
-            data['macs'].append({'mac': m.group(1), 'apt': apt.group(1) if apt else None})
+            data['tipo'] = m.group(1).strip()
+
+        # Observación en línea sola
+        if re.match(r'^Observaci[oó]n\s*:?-?\s*$', clean, re.I):
+            collecting_obs = True
+            continue
+
+        # Observación en la misma línea
+        m = re.search(r'Observaci[oó]n\s*:?-?\s*(.+)', clean, re.I)
+        if m:
+            data['observacion'] = m.group(1).strip()
 
         # Appointment
-        m = re.search(r'Appointment\s*#?(\d+)', line, re.I)
-        if m: data['appointment_num'] = m.group(1)
+        m = re.search(r'Appointment\s*#?\s*(\d+)', clean, re.I)
+        if m:
+            data['appointment_num'] = m.group(1)
 
         # URLs
-        m = re.search(r'(https?://\S+)', line)
+        m = re.search(r'(https?://\S+)', clean)
         if m:
-            url = m.group(1)
-            ctx = line.lower() + (lines[i-1].lower() if i > 0 else '')
-            if 'drive' in ctx or 'topolog' in ctx:
+            url = m.group(1).strip()
+            prev = lines[i - 1].lower() if i > 0 else ''
+            ctx = low + ' ' + prev
+
+            if 'drive' in url.lower() or 'topolog' in ctx:
                 data['topologia_url'] = url
-            elif 'map' in ctx or 'ubicac' in ctx:
+            elif 'maps' in url.lower() or 'goo.gl' in url.lower() or 'ubicac' in ctx:
                 data['ubicacion_url'] = url
 
-    # Observación
-    m = re.search(r'Observaci[oó]n:?\n([\s\S]+?)(?:\n(?:Usuario|Topolog|Ubicac|Técnico))', texto, re.I)
-    if m: data['observacion'] = m.group(1).strip()
+    if obs_lines and 'observacion' not in data:
+        data['observacion'] = '\n'.join(obs_lines).strip()
+
+    if 'afectados' not in data and data.get('macs'):
+        data['afectados'] = len(data['macs'])
 
     return data
 
@@ -350,26 +408,41 @@ def login():
 @app.route('/login', methods=['POST'])
 def do_login():
     rol = request.form.get('rol')
+
     if rol == 'coordinador':
         pin = request.form.get('pin', '')
         pin_correcto = os.environ.get('COORDINADOR_PIN', '1234')
+
         if pin != pin_correcto:
-            tecnicos = Tecnico.query.filter_by(activo=True).all()
-            return render_template('login.html', tecnicos=tecnicos, error='PIN incorrecto')
+            tecnicos = Tecnico.query.filter_by(activo=True).order_by(Tecnico.nombre).all()
+            return render_template(
+                'login.html',
+                tecnicos=tecnicos,
+                error='PIN incorrecto'
+            )
+
         session['rol'] = 'coordinador'
         session['nombre'] = 'Coordinador'
         session['tecnico_id'] = None
         return redirect(url_for('coordinador'))
-    elif rol == 'tecnico':
+
+    if rol == 'tecnico':
         tec_id = request.form.get('tecnico_id')
         tec = Tecnico.query.get(tec_id)
+
         if not tec or not tec.activo:
-            tecnicos = Tecnico.query.filter_by(activo=True).all()
-            return render_template('login.html', tecnicos=tecnicos, error='Técnico no encontrado')
+            tecnicos = Tecnico.query.filter_by(activo=True).order_by(Tecnico.nombre).all()
+            return render_template(
+                'login.html',
+                tecnicos=tecnicos,
+                error='Técnico no encontrado'
+            )
+
         session['rol'] = 'tecnico'
         session['tecnico_id'] = tec.id
         session['nombre'] = tec.nombre
         return redirect(url_for('tecnico'))
+
     return redirect(url_for('login'))
 
 
@@ -393,6 +466,28 @@ def tecnico():
     tec = Tecnico.query.get(session['tecnico_id'])
     return render_template('tecnico.html', tecnico=tec, nombre=session['nombre'])
 
+
+# ─── API para previsualizar/llenar formulario desde Slack ───────────────
+
+@app.route('/api/parse-slack', methods=['POST'])
+@require_login(['coordinador'])
+def parse_slack_preview():
+    data = request.json or {}
+    raw = data.get('raw_mensaje', '').strip()
+
+    if not raw:
+        return jsonify({'error': 'Mensaje vacío'}), 400
+
+    parsed = parse_slack_message(raw)
+
+    if not parsed.get('site'):
+        return jsonify({
+            'error': 'No se pudo extraer el nombre del sitio',
+            'parsed': parsed
+        }), 400
+
+    return jsonify(parsed)
+  
 
 # ─── API: Tickets ─────────────────────────────────────
 
