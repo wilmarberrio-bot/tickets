@@ -19,8 +19,7 @@ def now_colombia():
 # ─── App setup ────────────────────────────────────────
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'ftth-torre-control-2026-secreto')
-app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'ftth-torre-control-2026-secreto')
+
 
 raw_db = os.environ.get('DATABASE_URL', 'sqlite:///torre_control.db')
 # Render usa postgres://, SQLAlchemy necesita postgresql://
