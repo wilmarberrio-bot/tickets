@@ -533,8 +533,18 @@ def crear_ticket():
     if not data.get('site'):
         return jsonify({'error': 'El campo site es obligatorio'}), 400
 
+    # Evitar duplicados por número de ticket Slack
+    slack_num = data.get('slack_num')
+    if slack_num:
+        existente = Ticket.query.filter_by(slack_num=str(slack_num)).first()
+        if existente:
+            return jsonify({
+                'error': f'El ticket #{slack_num} ya existe',
+                'ticket': existente.to_dict()
+            }), 409
+
     t = Ticket(
-        slack_num       = data.get('slack_num'),
+        slack_num       = slack_num,
         site            = data['site'],
         torre           = data.get('torre', 'Torre 1'),
         acc_nombre      = data.get('acc_nombre'),
@@ -552,13 +562,19 @@ def crear_ticket():
         raw_mensaje     = raw or None,
         fecha_apertura  = datetime.utcnow(),
     )
+
     db.session.add(t)
     db.session.flush()
+
     evaluar_reincidencia(t)
+
     log_actividad(
         f"Nuevo ticket #{t.slack_num or t.id} — {t.site} {t.torre}",
-        'new', t.id, session.get('nombre')
+        'new',
+        t.id,
+        session.get('nombre')
     )
+
     db.session.commit()
     return jsonify(t.to_dict()), 201
 
@@ -786,12 +802,20 @@ def get_actividad():
 @app.route('/webhook/slack', methods=['POST'])
 def webhook_slack():
     """
-    Recibe mensajes de Slack via Make.com o Zapier.
+    Recibe mensajes de Slack vía Make.com o Zapier.
     Make.com: POST con body { "text": "mensaje del canal" }
     """
-    # Verificar token básico
+
+    # Verificar token del webhook
+    expected = os.environ.get('WEBHOOK_TOKEN')
+
+    if not expected:
+        return jsonify({
+            'error': 'WEBHOOK_TOKEN no está configurado en el servidor'
+        }), 500
+
     token = request.headers.get('X-Webhook-Token', '')
-    expected = os.environ.get('WEBHOOK_TOKEN', 'mi-token-secreto')
+
     if token != expected:
         return jsonify({'error': 'Token inválido'}), 401
 
@@ -802,11 +826,28 @@ def webhook_slack():
         return jsonify({'skipped': True}), 200
 
     parsed = parse_slack_message(texto)
+
     if not parsed.get('site'):
-        return jsonify({'skipped': True, 'reason': 'No se pudo extraer site'}), 200
+        return jsonify({
+            'skipped': True,
+            'reason': 'No se pudo extraer site',
+            'parsed': parsed
+        }), 200
+
+    # Evitar duplicados desde Slack/Make
+    slack_num = parsed.get('slack_num')
+    if slack_num:
+        existente = Ticket.query.filter_by(slack_num=str(slack_num)).first()
+        if existente:
+            return jsonify({
+                'created': False,
+                'duplicate': True,
+                'ticket_id': existente.id,
+                'slack_num': slack_num
+            }), 200
 
     t = Ticket(
-        slack_num       = parsed.get('slack_num'),
+        slack_num       = slack_num,
         site            = parsed.get('site', 'Sin nombre'),
         torre           = parsed.get('torre', 'Torre 1'),
         acc_nombre      = parsed.get('acc_nombre'),
@@ -824,16 +865,26 @@ def webhook_slack():
         raw_mensaje     = texto,
         fecha_apertura  = datetime.utcnow(),
     )
+
     db.session.add(t)
     db.session.flush()
+
     evaluar_reincidencia(t)
+
     log_actividad(
         f"Ticket #{t.slack_num or t.id} recibido desde Slack — {t.site} {t.torre}",
-        'new', t.id, 'Slack Bot'
+        'new',
+        t.id,
+        'Slack Bot'
     )
-    db.session.commit()
-    return jsonify({'created': True, 'ticket_id': t.id}), 201
 
+    db.session.commit()
+
+    return jsonify({
+        'created': True,
+        'ticket_id': t.id,
+        'slack_num': t.slack_num
+    }), 201
 
 # ─── Init DB con datos semilla ────────────────────────
 
