@@ -734,45 +734,10 @@ def webhook_slack():
 # ─── Init DB con datos semilla ────────────────────────
 
 def seed_db():
-    """Carga datos iniciales si la DB está vacía."""
-    if Tecnico.query.count() == 0:
-        for nombre, zona, tel in [
-            ('Oscar Yepes Villa',  'Norte',  '+573001234501'),
-            ('Carlos Restrepo',    'Sur',    '+573001234502'),
-            ('Juan Mosquera',      'Centro', '+573001234503'),
-            ('Andrés Gil',         'Norte',  '+573001234504'),
-            ('Felipe Mora',        'Sur',    '+573001234505'),
-        ]:
-            db.session.add(Tecnico(nombre=nombre, zona=zona, telefono=tel, activo=True))
-        db.session.commit()
-        print("✅ Técnicos semilla creados")
-
-    if Ticket.query.count() == 0:
-        ejemplos = [
-            ('499730', 'Gaita Apartamentos', 'Torre 2', '100.98.165.242', 'GAPA_ACC02',
-             '100.98.165.9', 'GAPA_EDGE04', 'S600', 'Desconexión SW', 5, 'ABIERTO'),
-            ('499712', 'EPAA Ciudadela',     'Torre 1', '100.71.57.9',   'EPAA_EDGE04',
-             '100.71.57.9', 'EPAA_EDGE04',  '310',  'Ausencia Servicio', 7, 'EN_SITIO'),
-            ('499680', 'Arca Residencias',   'Torre 1', '100.84.11.7',   'ARCA_ACC02',
-             '100.84.11.1', 'ARCA_EDGE01',  '310',  'Saturación SW',     4, 'CERRADO'),
-        ]
-        tecs = Tecnico.query.all()
-        for i, (sn, site, torre, acc_ip, acc_nom, edge_ip, edge_nom, modelo, tipo, afect, estado) in enumerate(ejemplos):
-            t = Ticket(
-                slack_num=sn, site=site, torre=torre,
-                acc_ip=acc_ip, acc_nombre=acc_nom,
-                edge_ip=edge_ip, edge_nombre=edge_nom,
-                modelo=modelo, tipo=tipo, afectados=afect, estado=estado,
-                tecnico_id=tecs[i % len(tecs)].id if estado != 'ABIERTO' else None,
-                fecha_apertura=datetime.utcnow()
-            )
-            db.session.add(t)
-            db.session.flush()
-            evaluar_reincidencia(t)
-        db.session.commit()
-        print("✅ Tickets de ejemplo creados")
+    pass  # DB inicia limpia. Agrega tus tecnicos reales desde el panel Coordinador.
 
 
+    
 with app.app_context():
     db.create_all()
     seed_db()
