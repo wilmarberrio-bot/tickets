@@ -268,15 +268,24 @@ def parse_slack_message(texto):
             if nxt and len(nxt) < 20: data['modelo'] = nxt
 
         # Afectados
-        if re.search(r'#\s*afectados', line, re.I):
-            nxt = lines[i+1] if i+1 < len(lines) else ''
-            m = re.search(r'(\d+)', nxt)
-            if m: data['afectados'] = int(m.group(1))
+       if re.search(r'#\s*afectados', line, re.I) and 'afectados' not in data:
+            m = re.search(r'#\s*[Aa]fectados\s*:?\s*(\d+)', line)
+            if m:
+                data['afectados'] = int(m.group(1))
+            else:
+                nxt = lines[i+1] if i+1 < len(lines) else ''
+                m2 = re.search(r'(\d+)', nxt)
+                if m2: data['afectados'] = int(m2.group(1))
 
         # Tipo de problema
-        if re.search(r'tipo de problema', line, re.I):
-            nxt = lines[i+1] if i+1 < len(lines) else ''
-            if nxt: data['tipo'] = nxt
+    if re.search(r'tipo de problema', line, re.I) and 'tipo' not in data:
+            m = re.search(r'[Tt]ipo\s+de\s+[Pp]roblema:?\s*(.+)', line)
+            if m and m.group(1).strip():
+                data['tipo'] = m.group(1).strip()
+            else:
+                nxt = lines[i+1] if i+1 < len(lines) else ''
+                if nxt and len(nxt) < 60:
+                    data['tipo'] = nxt
 
         # MACs
         m = re.search(r'([0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2})', line, re.I)
