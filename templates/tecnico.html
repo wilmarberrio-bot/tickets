@@ -110,11 +110,13 @@
           <option>Falla eléctrica / UPS</option>
           <option>Saturación de puertos</option>
           <option>Error de configuración</option>
-          <option>Daño en fibra óptica</option>
+          <option>switch quemado</option>
           <option>Falla en equipo (S600/310)</option>
-          <option>Mala manipulación previa</option>
-          <option>Intermitencia no resuelta</option>
-          <option>Conector sucio / oxidado</option>
+          <option>Manipulacion externa</option>
+          <option>Cambio de cableado</option>
+          <option>Cambio de conector</option>
+          <option>Hurto de switch</option>
+          <option>Hurto de cableado</option>
         </select></div>
 
       <div class="mf"><label>Clasificación de la falla *</label>
@@ -125,7 +127,7 @@
           <option>⚡ Problema eléctrico — UPS, planta, corte</option>
           <option>📊 Saturación — puertos o ancho de banda</option>
           <option>🛠 Mala manipulación — alguien modificó mal</option>
-          <option>💥 Daño físico — cable, conector, chasis</option>
+          <option>💥 Daño físico — cable, conector</option>
           <option>〰️ Intermitencia — persiste o es esporádico</option>
           <option>⚙️ Error de configuración — VLAN, puerto, etc.</option>
         </select></div>
@@ -153,7 +155,7 @@
       </div>
 
       <div class="mrow" style="margin-bottom:12px">
-        <div class="mf"><label>Potencia OPM (dBm)</label>
+        <div class="mf"><label>Velocidad en switch</label>
           <input type="number" id="c-pot" placeholder="Ej: -22.4" step="0.1"></div>
         <div class="mf"><label>Estado final *</label>
           <select id="c-est">
