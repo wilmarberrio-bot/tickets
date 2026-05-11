@@ -5,9 +5,15 @@ Flask backend con roles: coordinador y técnico
 
 import os, re, json
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 from flask import (Flask, render_template, request, jsonify,
                    session, redirect, url_for, abort)
 from flask_sqlalchemy import SQLAlchemy
+
+TZ_CO = ZoneInfo("America/Bogota")
+
+def now_colombia():
+
 
 # ─── App setup ────────────────────────────────────────
 app = Flask(__name__)
@@ -32,13 +38,13 @@ class Tecnico(db.Model):
     telefono    = db.Column(db.String(20))
     slack_id    = db.Column(db.String(20))
     activo      = db.Column(db.Boolean, default=True)
-    creado      = db.Column(db.DateTime, default=datetime.utcnow)
+    creado      = db.Column(db.DateTime, default=now_colombia)
     tickets     = db.relationship('Ticket', backref='tecnico_rel', lazy=True)
 
     def to_dict(self):
         tickets_mes = Ticket.query.filter(
             Ticket.tecnico_id == self.id,
-            Ticket.fecha_apertura >= datetime.utcnow().replace(day=1)
+            Ticket.fecha_apertura >= now_colombia().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         ).count()
         en_curso = Ticket.query.filter(
             Ticket.tecnico_id == self.id,
@@ -74,7 +80,7 @@ class Ticket(db.Model):
     es_reincidente  = db.Column(db.Boolean, default=False)
     evento_num      = db.Column(db.Integer, default=1)
     tecnico_id      = db.Column(db.Integer, db.ForeignKey('tecnicos.id'), nullable=True)
-    fecha_apertura  = db.Column(db.DateTime, default=datetime.utcnow)
+    fecha_apertura  = db.Column(db.DateTime, default=now_colombia)
     fecha_asignacion= db.Column(db.DateTime)
     fecha_llegada   = db.Column(db.DateTime)
     fecha_cierre    = db.Column(db.DateTime)
@@ -139,7 +145,7 @@ class Cierre(db.Model):
     riesgo          = db.Column(db.Boolean, default=False)
     desc_riesgo     = db.Column(db.Text)
     recomendacion   = db.Column(db.Text)
-    creado          = db.Column(db.DateTime, default=datetime.utcnow)
+    creado          = db.Column(db.DateTime, default=now_colombia)
 
     def to_dict(self):
         return {
@@ -164,7 +170,7 @@ class Actividad(db.Model):
     tipo        = db.Column(db.String(20))   # new|assign|closed|alert
     ticket_id   = db.Column(db.Integer)
     usuario     = db.Column(db.String(80))
-    fecha       = db.Column(db.DateTime, default=datetime.utcnow)
+    fecha       = db.Column(db.DateTime, default=now_colombia)
 
     def to_dict(self):
         return {
@@ -183,7 +189,7 @@ def log_actividad(texto, tipo, ticket_id=None, usuario=None):
 
 def evaluar_reincidencia(ticket):
     """Evalúa las 8 reglas de negocio y asigna semáforo al ticket."""
-    inicio_mes = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0)
+    inicio_mes = now_colombia().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     eventos_site = Ticket.query.filter(
         Ticket.site == ticket.site,
         Ticket.torre == ticket.torre,
@@ -560,7 +566,7 @@ def crear_ticket():
         ubicacion_url   = data.get('ubicacion_url'),
         appointment_num = data.get('appointment_num'),
         raw_mensaje     = raw or None,
-        fecha_apertura  = datetime.utcnow(),
+        fecha_apertura  = now_colombia(),
     )
 
     db.session.add(t)
@@ -598,7 +604,7 @@ def asignar_ticket(tid):
 
     t.tecnico_id = tec.id
     t.estado = 'EN_TRANSITO'
-    t.fecha_asignacion = datetime.utcnow()
+    t.fecha_asignacion = now_colombia()
 
     log_actividad(
         f"{tec.nombre} asignado a #{t.slack_num or t.id} — {t.site}",
@@ -615,7 +621,7 @@ def marcar_en_sitio(tid):
     if session['rol'] == 'tecnico' and t.tecnico_id != session['tecnico_id']:
         abort(403)
     t.estado = 'EN_SITIO'
-    t.fecha_llegada = datetime.utcnow()
+    t.fecha_llegada = now_colombia()
     log_actividad(f"Técnico llegó a sitio — #{t.slack_num or t.id} {t.site}", 'assign', t.id, session.get('nombre'))
     db.session.commit()
     return jsonify(t.to_dict())
@@ -659,8 +665,7 @@ def cerrar_ticket(tid):
 
     estado_final = data['estado_final']
     t.estado = estado_final
-    t.fecha_cierre = datetime.utcnow()
-
+    t.fecha_cierre = now_colombia()
     if 'repetitiva' in data['clasificacion'].lower():
         t.es_reincidente = True
 
@@ -863,7 +868,7 @@ def webhook_slack():
         ubicacion_url   = parsed.get('ubicacion_url'),
         appointment_num = parsed.get('appointment_num'),
         raw_mensaje     = texto,
-        fecha_apertura  = datetime.utcnow(),
+        fecha_apertura = now_colombia(),
     )
 
     db.session.add(t)
