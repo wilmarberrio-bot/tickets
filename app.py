@@ -13,9 +13,12 @@ from flask_sqlalchemy import SQLAlchemy
 TZ_CO = ZoneInfo("America/Bogota")
 
 def now_colombia():
+    return datetime.now(TZ_CO).replace(tzinfo=None)
 
 
 # ─── App setup ────────────────────────────────────────
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'ftth-torre-control-2026-secreto')
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'ftth-torre-control-2026-secreto')
 
