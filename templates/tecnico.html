@@ -98,11 +98,7 @@
       </div>
       <div id="c-info" class="alert-strip verde" style="display:none"></div>
 
-      <div class="mrow">
-        <div class="mf"><label>Hora llegada al sitio *</label><input type="time" id="c-ll"></div>
-        <div class="mf"><label>Hora cierre *</label><input type="time" id="c-ch"></div>
-      </div>
-
+     
       <div class="mf"><label>Causa raíz del problema *</label>
         <select id="c-causa">
           <option value="">-- Selecciona la causa --</option>
@@ -453,17 +449,17 @@ async function submitCierre(estadoFinal) {
     goTab('mis-tickets');
   } catch(e) { toast('Error: ' + e.message, 'err'); }
 }
-
 function clearCierre() {
   ['c-ticket','c-causa','c-cl','c-est','c-esc'].forEach(id => document.getElementById(id).value='');
   ['c-sol','c-rec','c-riesgo-desc'].forEach(id => document.getElementById(id).value='');
-  ['c-ll','c-ch','c-pot'].forEach(id => document.getElementById(id).value='');
+  ['c-pot'].forEach(id => document.getElementById(id).value='');
   document.querySelectorAll('input[name="acc"]').forEach(x => x.checked=false);
   document.getElementById('c-riesgo').checked = false;
   document.getElementById('c-riesgo-desc').style.display = 'none';
   document.getElementById('c-info').style.display = 'none';
   document.getElementById('c-sn').textContent = '0/50 mín.';
   curCierreId = null;
+
 }
 
 // ══════════════════════════════════════════
