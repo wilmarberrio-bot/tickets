@@ -72,8 +72,8 @@ class Ticket(db.Model):
     afectados       = db.Column(db.Integer, default=0)
     observacion     = db.Column(db.Text)
     macs            = db.Column(db.Text)
-    topologia_url   = db.Column(db.String(300))
-    ubicacion_url   = db.Column(db.String(300))
+    topologia_url   = db.Column(db.Text)
+    ubicacion_url   = db.Column(db.Text)
     appointment_num = db.Column(db.String(20))
     estado          = db.Column(db.String(20), default='ABIERTO')
     semaforo        = db.Column(db.String(10), default='VERDE')
@@ -167,7 +167,7 @@ class Cierre(db.Model):
 class Actividad(db.Model):
     __tablename__ = 'actividad'
     id        = db.Column(db.Integer, primary_key=True)
-    texto     = db.Column(db.String(300))
+    texto     = db.Column(db.Text)
     tipo      = db.Column(db.String(20))
     ticket_id = db.Column(db.Integer)
     usuario   = db.Column(db.String(80))
