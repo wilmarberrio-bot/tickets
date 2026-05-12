@@ -98,7 +98,6 @@
       </div>
       <div id="c-info" class="alert-strip verde" style="display:none"></div>
 
-     
       <div class="mf"><label>Causa raíz del problema *</label>
         <select id="c-causa">
           <option value="">-- Selecciona la causa --</option>
@@ -113,7 +112,6 @@
           <option>Cambio de conector</option>
           <option>Hurto de switch</option>
           <option>Hurto de cableado</option>
-          <option>No necesito intervencion</option>
         </select></div>
 
       <div class="mf"><label>Clasificación de la falla *</label>
@@ -127,8 +125,6 @@
           <option>💥 Daño físico — cable, conector</option>
           <option>〰️ Intermitencia — persiste o es esporádico</option>
           <option>⚙️ Error de configuración — VLAN, puerto, etc.</option>
-          <option>⚙️ ticket mal creado.</option>
-          <option>⚙️ Cerrado sin intervencion</option>
         </select></div>
 
       <div class="mf"><label>Acciones realizadas * (marca todas las que hiciste)</label>
@@ -153,16 +149,9 @@
           <select id="c-sw"><option>Operativo ✅</option><option>Escalado ❌</option><option>En monitoreo ⚠️</option></select></div>
       </div>
 
-      <div class="mrow" style="margin-bottom:12px">
-        <div class="mf"><label>Velocidad en switch</label>
-          <input type="number" id="c-pot" placeholder="Ej: -22.4" step="0.1"></div>
-        <div class="mf"><label>Estado final *</label>
-          <select id="c-est">
-            <option value="">-- Selecciona --</option>
-            <option value="CERRADO">✅ Resuelto — usuarios con servicio</option>
-            <option value="ESCALADO">🔺 Escalado — requiere nivel superior</option>
-            <option value="EN_SITIO">⏳ En monitoreo — pendiente verificar</option>
-          </select></div>
+      <div class="mf" style="margin-bottom:12px">
+        <label>Velocidad en switch</label>
+        <input type="number" id="c-pot" placeholder="Ej: -22.4" step="0.1">
       </div>
 
       <div class="mf" style="margin-bottom:12px">
@@ -359,7 +348,7 @@ function verDetalle(id) {
     </div>`;
   const macs = t.macs || [];
   document.getElementById('det-macs').innerHTML = macs.length
-    ? '<strong>MACs:</strong> ' + macs.map(m => `${m.mac} APT ${m.apt||'?'}`).join(' | ') : '';
+    ? '<strong>Usuarios / MACs:</strong> ' + macs.map(m => m.apt ? `${m.mac} APT ${m.apt}` : `${m.mac}`).join(' | ') : '';
 
   const links = [];
   if (t.topologia_url) links.push(`<a href="${t.topologia_url}" target="_blank" class="btn btn-g btn-sm">🔗 Topología Drive</a>`);
@@ -383,7 +372,7 @@ function updateCierreSelect() {
   const sel = document.getElementById('c-ticket');
   const cur = sel.value;
   sel.innerHTML = '<option value="">-- Selecciona el ticket a cerrar --</option>';
-  MIS_TICKETS.filter(t => t.estado === 'EN_SITIO' || t.estado === 'EN_TRANSITO').forEach(t => {
+  MIS_TICKETS.filter(t => t.estado === 'EN_SITIO').forEach(t => {
     const opt = new Option(`#${t.slack_num||t.id} — ${t.site} ${t.torre||''} (${t.estado.replace('_',' ')})`, t.id);
     sel.add(opt);
   });
@@ -419,7 +408,7 @@ async function submitCierre(estadoFinal) {
   const causa   = document.getElementById('c-causa').value;
   const clasif  = document.getElementById('c-cl').value;
   const sol     = document.getElementById('c-sol').value;
-  const estFin  = document.getElementById('c-est').value || estadoFinal;
+  const estFin  = estadoFinal;
   const acciones= [...document.querySelectorAll('input[name="acc"]:checked')].map(x => x.value);
 
   if (!causa)          { toast('Selecciona la causa raíz', 'err'); return; }
@@ -428,7 +417,7 @@ async function submitCierre(estadoFinal) {
   if (sol.length < 50) { toast('La solución debe tener mínimo 50 caracteres', 'warn'); return; }
 
   try {
-    await api(`/api/tickets/${curCierreId}/cerrar`, {
+    const res = await api(`/api/tickets/${curCierreId}/cerrar`, {
       method: 'POST',
       body: {
         causa_raiz:    causa,
@@ -446,14 +435,16 @@ async function submitCierre(estadoFinal) {
         recomendacion: document.getElementById('c-rec').value,
       }
     });
+
     clearCierre();
-    toast(`${estFin==='CERRADO'?'✅':'🔺'} Ticket ${estFin.toLowerCase()} correctamente`, 'ok');
-    loadMisTickets();
+    toast(`${res.estado==='CERRADO'?'✅':'🔺'} Ticket ${res.estado.toLowerCase()} correctamente`, 'ok');
+    await loadMisTickets();
     goTab('mis-tickets');
   } catch(e) { toast('Error: ' + e.message, 'err'); }
 }
+
 function clearCierre() {
-  ['c-ticket','c-causa','c-cl','c-est','c-esc'].forEach(id => document.getElementById(id).value='');
+  ['c-ticket','c-causa','c-cl','c-esc'].forEach(id => document.getElementById(id).value='');
   ['c-sol','c-rec','c-riesgo-desc'].forEach(id => document.getElementById(id).value='');
   ['c-pot'].forEach(id => document.getElementById(id).value='');
   document.querySelectorAll('input[name="acc"]').forEach(x => x.checked=false);
@@ -462,7 +453,6 @@ function clearCierre() {
   document.getElementById('c-info').style.display = 'none';
   document.getElementById('c-sn').textContent = '0/50 mín.';
   curCierreId = null;
-
 }
 
 // ══════════════════════════════════════════
