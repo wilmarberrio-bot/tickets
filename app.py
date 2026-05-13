@@ -309,8 +309,7 @@ def parse_slack_message(texto):
         m = re.search(r'Nombre\s+del\s+sitio\s*:?-?\s*(.+)', clean, re.I)
         if m: data['site'] = m.group(1).strip()
 
-              # Torre
-                # Torre
+        # Torre
         m = re.search(r'\bTorre\s*:?-?\s*([A-Za-z0-9\-]+)', clean, re.I)
         if m:
             data['torre'] = f"Torre {m.group(1).strip()}"
@@ -323,7 +322,6 @@ def parse_slack_message(texto):
         # Modelo equipo
         m = re.search(r'Modelo\s+equipo\s*:?-?\s*(.+)', clean, re.I)
         if m:
-            data['modelo'] = m.group(1).strip()
             data['modelo'] = m.group(1).strip()
 
         m = re.search(r'#\s*Afectados\s*:?-?\s*(\d+)', clean, re.I)
