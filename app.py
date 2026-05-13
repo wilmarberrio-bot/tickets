@@ -63,6 +63,7 @@ class Ticket(db.Model):
     slack_num       = db.Column(db.String(20))
     site            = db.Column(db.String(120), nullable=False)
     torre           = db.Column(db.String(40))
+    zona            = db.Column(db.String(50))
     acc_nombre      = db.Column(db.String(120))
     acc_ip          = db.Column(db.String(20))
     edge_nombre     = db.Column(db.String(120))
@@ -101,6 +102,7 @@ class Ticket(db.Model):
             'slack_num': self.slack_num,
             'site': self.site,
             'torre': self.torre,
+            'zona': self.zona,
             'acc_nombre': self.acc_nombre,
             'acc_ip': self.acc_ip,
             'edge_nombre': self.edge_nombre,
@@ -307,11 +309,22 @@ def parse_slack_message(texto):
         m = re.search(r'Nombre\s+del\s+sitio\s*:?-?\s*(.+)', clean, re.I)
         if m: data['site'] = m.group(1).strip()
 
+              # Torre
+                # Torre
         m = re.search(r'\bTorre\s*:?-?\s*([A-Za-z0-9\-]+)', clean, re.I)
-        if m: data['torre'] = f"Torre {m.group(1).strip()}"
+        if m:
+            data['torre'] = f"Torre {m.group(1).strip()}"
 
+        # Zona
+        m = re.search(r'\bZona\s*:?-?\s*(.+)', clean, re.I)
+        if m:
+            data['zona'] = m.group(1).strip()
+
+        # Modelo equipo
         m = re.search(r'Modelo\s+equipo\s*:?-?\s*(.+)', clean, re.I)
-        if m: data['modelo'] = m.group(1).strip()
+        if m:
+            data['modelo'] = m.group(1).strip()
+            data['modelo'] = m.group(1).strip()
 
         m = re.search(r'#\s*Afectados\s*:?-?\s*(\d+)', clean, re.I)
         if m: data['afectados'] = int(m.group(1))
@@ -467,14 +480,24 @@ def crear_ticket():
         ex = Ticket.query.filter_by(slack_num=str(slack_num)).first()
         if ex: return jsonify({'error': f'El ticket #{slack_num} ya existe', 'ticket': ex.to_dict()}), 409
     t = Ticket(
-        slack_num=slack_num, site=data['site'], torre=data.get('torre', 'Torre 1'),
-        acc_nombre=data.get('acc_nombre'), acc_ip=data.get('acc_ip'),
-        edge_nombre=data.get('edge_nombre'), edge_ip=data.get('edge_ip'),
-        modelo=data.get('modelo'), tipo=data.get('tipo', 'Ausencia de Servicio'),
-        afectados=int(data.get('afectados', 0)), observacion=data.get('observacion'),
-        macs=json.dumps(data.get('macs', [])), topologia_url=data.get('topologia_url'),
-        ubicacion_url=data.get('ubicacion_url'), appointment_num=data.get('appointment_num'),
-        raw_mensaje=raw or None, fecha_apertura=now_colombia()
+        slack_num       = slack_num,
+        site            = data['site'],
+        torre           = data.get('torre', 'Torre 1'),
+        zona            = data.get('zona'),
+        acc_nombre      = data.get('acc_nombre'),
+        acc_ip          = data.get('acc_ip'),
+        edge_nombre     = data.get('edge_nombre'),
+        edge_ip         = data.get('edge_ip'),
+        modelo          = data.get('modelo'),
+        tipo            = data.get('tipo', 'Ausencia de Servicio'),
+        afectados       = int(data.get('afectados', 0)),
+        observacion     = data.get('observacion'),
+        macs            = json.dumps(data.get('macs', [])),
+        topologia_url   = data.get('topologia_url'),
+        ubicacion_url   = data.get('ubicacion_url'),
+        appointment_num = data.get('appointment_num'),
+        raw_mensaje     = raw or None,
+        fecha_apertura  = now_colombia(),
     )
     db.session.add(t); db.session.flush()
     evaluar_reincidencia(t)
@@ -1123,15 +1146,26 @@ def webhook_slack():
         if ex: return jsonify({'created': False, 'duplicate': True, 'ticket_id': ex.id}), 200
 
     t = Ticket(
-        slack_num=slack_num, site=parsed.get('site', 'Sin nombre'), torre=parsed.get('torre', 'Torre 1'),
-        acc_nombre=parsed.get('acc_nombre'), acc_ip=parsed.get('acc_ip'),
-        edge_nombre=parsed.get('edge_nombre'), edge_ip=parsed.get('edge_ip'),
-        modelo=parsed.get('modelo'), tipo=parsed.get('tipo', 'Ausencia de Servicio'),
-        afectados=int(parsed.get('afectados', 0)), observacion=parsed.get('observacion'),
-        macs=json.dumps(parsed.get('macs', [])), topologia_url=parsed.get('topologia_url'),
-        ubicacion_url=parsed.get('ubicacion_url'), appointment_num=parsed.get('appointment_num'),
-        raw_mensaje=texto, fecha_apertura=now_colombia()
+        slack_num       = slack_num,
+        site            = parsed.get('site', 'Sin nombre'),
+        torre           = parsed.get('torre', 'Torre 1'),
+        zona            = parsed.get('zona'),
+        acc_nombre      = parsed.get('acc_nombre'),
+        acc_ip          = parsed.get('acc_ip'),
+        edge_nombre     = parsed.get('edge_nombre'),
+        edge_ip         = parsed.get('edge_ip'),
+        modelo          = parsed.get('modelo'),
+        tipo            = parsed.get('tipo', 'Ausencia de Servicio'),
+        afectados       = int(parsed.get('afectados', 0)),
+        observacion     = parsed.get('observacion'),
+        macs            = json.dumps(parsed.get('macs', [])),
+        topologia_url   = parsed.get('topologia_url'),
+        ubicacion_url   = parsed.get('ubicacion_url'),
+        appointment_num = parsed.get('appointment_num'),
+        raw_mensaje     = texto,
+        fecha_apertura  = now_colombia(),
     )
+    
     db.session.add(t); db.session.flush()
     evaluar_reincidencia(t)
     log_actividad(f"Ticket #{t.slack_num or t.id} desde Slack — {t.site} {t.torre}", 'new', t.id, 'Slack Bot')
