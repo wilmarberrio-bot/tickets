@@ -154,8 +154,9 @@ Usuarios afectados:
         <div class="mf"><label>Nombre del site *</label><input type="text" id="n-site" placeholder="Gaita Apartamentos"></div>
         <div class="mrow">
           <div class="mf"><label>Torre *</label><input type="text" id="n-torre" placeholder="Torre 2"></div>
-          <div class="mf"><label>Modelo equipo</label><input type="text" id="n-modelo" placeholder="S600"></div>
+          <div class="mf"><label>Zona</label><input type="text" id="n-zona" placeholder="Ej: Bello / Medellín / Norte"></div>
         </div>
+        <div class="mf"><label>Modelo equipo</label><input type="text" id="n-modelo" placeholder="S600"></div>
         <div class="mrow">
           <div class="mf"><label>Nombre ACC</label><input type="text" id="n-acc-nom" placeholder="COL_MDE_GAPA_CN_02_ACC02"></div>
           <div class="mf"><label>IP del ACC</label><input type="text" id="n-acc-ip" placeholder="100.98.165.242"></div>
@@ -377,11 +378,29 @@ async function api(url, opts={}) {
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Error del servidor' }));
-    throw new Error(err.error || `HTTP ${res.status}`);
+
+  const contentType = res.headers.get('content-type') || '';
+  let payload = null;
+
+  if (contentType.includes('application/json')) {
+    payload = await res.json().catch(() => null);
+  } else {
+    const txt = await res.text().catch(() => '');
+    payload = txt ? { error: txt } : null;
   }
-  return res.json();
+
+  if (!res.ok) {
+    console.error('API ERROR', { url, status: res.status, payload });
+
+    const detalle = payload?.error || payload?.message || `HTTP ${res.status}`;
+    const tipo = payload?.type ? ` (${payload.type})` : '';
+    const path = payload?.path ? ` en ${payload.path}` : '';
+    const trace = Array.isArray(payload?.trace) ? `\n${payload.trace.join('\n')}` : '';
+
+    throw new Error(`${detalle}${tipo}${path}${trace}`);
+  }
+
+  return payload;
 }
 
 // ══════════════════════════════════════════
@@ -497,7 +516,7 @@ function renderTickets(all) {
     return `<tr>
       <td><strong style="color:var(--az2);cursor:pointer" onclick="showTopo(${t.id})">#${t.slack_num||t.id}</strong></td>
       <td style="font-size:11px;color:#8b949e">${fecha}</td>
-      <td>${t.site}<br><span style="font-size:10px;color:#8b949e">${t.torre||''}</span></td>
+      <td>${t.site}<br><span style="font-size:10px;color:#8b949e">${t.torre||''}</span><br><span style="font-size:10px;color:var(--az2)">${t.zona || 'Sin zona'}</span></td>
       <td style="font-size:10px;color:#8b949e">${t.acc_nombre||'—'}<br>${t.acc_ip||'—'}</td>
       <td>${t.tipo||'—'}</td>
       <td style="font-weight:700;color:${t.afectados>=5?'var(--rj2)':'var(--am2)'}">${t.afectados}</td>
@@ -563,7 +582,7 @@ function showTopo(id) {
   const t = TICKETS_CACHE.find(x => x.id === id);
   if (!t) return;
   const ok = t.estado === 'CERRADO';
-  document.getElementById('topo-tit').textContent = `#${t.slack_num||t.id} — ${t.site} ${t.torre||''}`;
+  document.getElementById('topo-tit').textContent = `#${t.slack_num||t.id} — ${t.site} ${t.torre||''} ${t.zona ? '— ' + t.zona : ''}`;
   document.getElementById('topo-cont').innerHTML = `
     <span class="topo-n" style="border-color:var(--vd2);color:var(--vd2)">🌐 Internet</span>
     <span class="topo-arr">→</span>
@@ -606,6 +625,7 @@ async function parsearSlack() {
     document.getElementById('n-slack').value = res.slack_num || '';
     document.getElementById('n-site').value = res.site || '';
     document.getElementById('n-torre').value = res.torre || '';
+    document.getElementById('n-zona').value = res.zona || '';
     document.getElementById('n-modelo').value = res.modelo || '';
 
     document.getElementById('n-acc-nom').value = res.acc_nombre || '';
@@ -630,7 +650,7 @@ async function parsearSlack() {
 
     document.getElementById('parse-result').style.display = 'block';
     document.getElementById('parse-result').textContent =
-      `✅ Formulario llenado: #${res.slack_num || ''} — ${res.site || ''} ${res.torre || ''} | ${res.afectados || 0} afectados`;
+      `✅ Formulario llenado: #${res.slack_num || ''} — ${res.site || ''} ${res.torre || ''} ${res.zona ? '| Zona: ' + res.zona : ''} | ${res.afectados || 0} afectados`;
 
     toast('✅ Formulario llenado desde Slack', 'ok');
 
@@ -686,6 +706,7 @@ async function registrarTicket() {
         slack_num: document.getElementById('n-slack').value,
         site,
         torre: torre || 'Torre 1',
+        zona: document.getElementById('n-zona').value.trim(),
 
         acc_nombre: document.getElementById('n-acc-nom').value,
         acc_ip: document.getElementById('n-acc-ip').value,
@@ -713,6 +734,7 @@ async function registrarTicket() {
       'n-slack',
       'n-site',
       'n-torre',
+      'n-zona',
       'n-acc-nom',
       'n-acc-ip',
       'n-edge-nom',
@@ -735,7 +757,17 @@ async function registrarTicket() {
     goTab('tickets');
 
   } catch (e) {
-    toast('Error: ' + e.message, 'err');
+    const msg = 'Error al crear ticket: ' + e.message;
+    console.error(msg, e);
+    toast(msg, 'err');
+
+    const pr = document.getElementById('parse-result');
+    if (pr) {
+      pr.style.display = 'block';
+      pr.style.color = 'var(--rj2)';
+      pr.style.whiteSpace = 'pre-wrap';
+      pr.textContent = msg;
+    }
   }
 }
 
