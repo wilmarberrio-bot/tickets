@@ -1173,12 +1173,29 @@ def webhook_slack():
 
 # ─── Init ─────────────────────────────────────────────
 
+
 def seed_db():
     pass  # DB inicia limpia. Agrega técnicos reales desde el panel Coordinador.
 
 
+def ensure_schema_updates():
+    """
+    Actualizaciones pequeñas de esquema para PostgreSQL.
+    db.create_all() crea tablas nuevas, pero no agrega columnas nuevas
+    a tablas ya existentes.
+    """
+    try:
+        with db.engine.begin() as conn:
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS zona VARCHAR(50)"
+            )
+    except Exception as e:
+        print(f"[WARN] No se pudo actualizar schema: {e}")
+
+
 with app.app_context():
     db.create_all()
+    ensure_schema_updates()
     seed_db()
 
 if __name__ == '__main__':
