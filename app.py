@@ -3,7 +3,7 @@ Torre de Control FTTH — Somos Internet  v2.0
 Flask backend con roles, exportación, archivo mensual y KPIs históricos
 """
 
-import os, re, json, csv, io
+import os, re, json, csv, io, traceback
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from flask import (Flask, render_template, request, jsonify,
@@ -26,6 +26,34 @@ app.config['SQLALCHEMY_DATABASE_URI'] = raw_db
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
+
+# ─── Manejo de errores API ───────────────────────────
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(e):
+    """Devuelve errores reales en endpoints API para depurar desde el frontend."""
+    if request.path.startswith('/api/') or request.path.startswith('/webhook/'):
+        db.session.rollback()
+        status = getattr(e, 'code', 500)
+        return jsonify({
+            'error': str(e),
+            'type': e.__class__.__name__,
+            'path': request.path,
+            'trace': traceback.format_exc().splitlines()[-8:],
+        }), status
+    raise e
+
+
+@app.errorhandler(500)
+def handle_500(e):
+    if request.path.startswith('/api/') or request.path.startswith('/webhook/'):
+        db.session.rollback()
+        return jsonify({
+            'error': str(e),
+            'type': e.__class__.__name__,
+            'path': request.path,
+        }), 500
+    return e
 
 # ─── Modelos ──────────────────────────────────────────
 
