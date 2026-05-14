@@ -179,7 +179,12 @@ class Cierre(db.Model):
     creado          = db.Column(db.DateTime, default=now_colombia)
 
     def to_dict(self):
+        tecnico = Tecnico.query.get(self.tecnico_id) if self.tecnico_id else None
         return {
+            'id': self.id,
+            'ticket_id': self.ticket_id,
+            'tecnico_id': self.tecnico_id,
+            'tecnico_nombre': tecnico.nombre if tecnico else None,
             'causa_raiz': self.causa_raiz,
             'clasificacion': self.clasificacion,
             'acciones': json.loads(self.acciones) if self.acciones else [],
@@ -190,7 +195,10 @@ class Cierre(db.Model):
             'solucion': self.solucion,
             'estado_final': self.estado_final,
             'escalamiento': self.escalamiento,
+            'riesgo': self.riesgo,
+            'desc_riesgo': self.desc_riesgo,
             'recomendacion': self.recomendacion,
+            'creado': self.creado.isoformat() if self.creado else None,
         }
 
 
