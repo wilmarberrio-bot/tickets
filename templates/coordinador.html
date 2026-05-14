@@ -110,6 +110,7 @@
       <button class="btn btn-g btn-sm" onclick="document.getElementById('topo-panel').style.display='none'">✕</button></div>
     <div class="topo" id="topo-cont"></div>
     <div id="topo-macs" style="padding:0 14px 12px;font-size:11px;color:#8b949e"></div>
+    <div id="topo-cierre" style="display:none;padding:0 14px 14px"></div>
   </div>
 </div>
 
@@ -581,8 +582,13 @@ async function confirmarAsignacion() {
 function showTopo(id) {
   const t = TICKETS_CACHE.find(x => x.id === id);
   if (!t) return;
+
   const ok = t.estado === 'CERRADO';
-  document.getElementById('topo-tit').textContent = `#${t.slack_num||t.id} — ${t.site} ${t.torre||''} ${t.zona ? '— ' + t.zona : ''}`;
+  const cierre = t.cierre || null;
+
+  document.getElementById('topo-tit').textContent =
+    `#${t.slack_num||t.id} — ${t.site} ${t.torre||''} ${t.zona ? '— ' + t.zona : ''}`;
+
   document.getElementById('topo-cont').innerHTML = `
     <span class="topo-n" style="border-color:var(--vd2);color:var(--vd2)">🌐 Internet</span>
     <span class="topo-arr">→</span>
@@ -597,10 +603,87 @@ function showTopo(id) {
 
   const macs = t.macs || [];
   document.getElementById('topo-macs').innerHTML = macs.length
-  ? '<strong style="color:#8b949e">Usuarios / MACs afectados:</strong> ' + macs.map(m =>
-      m.apt ? `${m.mac} APT ${m.apt}` : `${m.mac}`
-    ).join(' | ')
-  : '';
+    ? '<strong style="color:#8b949e">Usuarios / MACs afectados:</strong> ' + macs.map(m =>
+        m.apt ? `${m.mac} APT ${m.apt}` : `${m.mac}`
+      ).join(' | ')
+    : '';
+
+  const cierreEl = document.getElementById('topo-cierre');
+
+  if (cierre) {
+    const acciones = cierre.acciones && cierre.acciones.length
+      ? cierre.acciones.join(', ')
+      : '—';
+
+    const fechaCierre = t.fecha_cierre
+      ? new Date(t.fecha_cierre).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
+      : (cierre.creado ? new Date(cierre.creado).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+
+    const mttr = t.mttr_minutos
+      ? `${Math.floor(t.mttr_minutos / 60)}h ${t.mttr_minutos % 60}m`
+      : '—';
+
+    cierreEl.style.display = 'block';
+    cierreEl.innerHTML = `
+      <div style="border:1px solid var(--g2);background:var(--pn);border-radius:8px;padding:12px;margin-top:8px">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+          <h4 style="font-size:13px;color:var(--vd2);margin:0">✅ Seguimiento / Cierre técnico</h4>
+          <span class="badge">${cierre.estado_final || t.estado}</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px">
+          <div><div style="font-size:10px;color:#8b949e;text-transform:uppercase">Técnico</div><div style="font-size:12px;color:#e6edf3">${cierre.tecnico_nombre || t.tecnico_nombre || '—'}</div></div>
+          <div><div style="font-size:10px;color:#8b949e;text-transform:uppercase">Fecha cierre</div><div style="font-size:12px;color:#e6edf3">${fechaCierre}</div></div>
+          <div><div style="font-size:10px;color:#8b949e;text-transform:uppercase">MTTR</div><div style="font-size:12px;color:#e6edf3">${mttr}</div></div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div><div style="font-size:10px;color:#8b949e;text-transform:uppercase">Motivo / causa raíz</div><div style="font-size:12px;color:#e6edf3">${cierre.causa_raiz || '—'}</div></div>
+          <div><div style="font-size:10px;color:#8b949e;text-transform:uppercase">Clasificación</div><div style="font-size:12px;color:#e6edf3">${cierre.clasificacion || '—'}</div></div>
+        </div>
+
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:#8b949e;text-transform:uppercase">Acciones realizadas</div>
+          <div style="font-size:12px;color:#e6edf3">${acciones}</div>
+        </div>
+
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:#8b949e;text-transform:uppercase">Notas / solución aplicada</div>
+          <div style="font-size:12px;color:#e6edf3;white-space:pre-wrap;line-height:1.5">${cierre.solucion || '—'}</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px">
+          <div><div style="font-size:10px;color:#8b949e;text-transform:uppercase">ACC</div><div style="font-size:12px;color:#e6edf3">${cierre.estado_acc || '—'}</div></div>
+          <div><div style="font-size:10px;color:#8b949e;text-transform:uppercase">Edge</div><div style="font-size:12px;color:#e6edf3">${cierre.estado_edge || '—'}</div></div>
+          <div><div style="font-size:10px;color:#8b949e;text-transform:uppercase">Switch</div><div style="font-size:12px;color:#e6edf3">${cierre.estado_switch || '—'}</div></div>
+          <div><div style="font-size:10px;color:#8b949e;text-transform:uppercase">Velocidad / potencia</div><div style="font-size:12px;color:#e6edf3">${cierre.potencia_dbm ?? '—'}</div></div>
+        </div>
+
+        ${cierre.escalamiento ? `
+          <div style="margin-bottom:10px">
+            <div style="font-size:10px;color:#8b949e;text-transform:uppercase">Escalamiento</div>
+            <div style="font-size:12px;color:var(--am2)">${cierre.escalamiento}</div>
+          </div>` : ''}
+
+        ${cierre.riesgo ? `
+          <div style="margin-bottom:10px;border-left:3px solid var(--rj2);padding-left:8px">
+            <div style="font-size:10px;color:#8b949e;text-transform:uppercase">Riesgo futuro identificado</div>
+            <div style="font-size:12px;color:#e6edf3;white-space:pre-wrap">${cierre.desc_riesgo || 'Marcado sin descripción'}</div>
+          </div>` : ''}
+
+        ${cierre.recomendacion ? `
+          <div>
+            <div style="font-size:10px;color:#8b949e;text-transform:uppercase">Recomendación técnica</div>
+            <div style="font-size:12px;color:#e6edf3;white-space:pre-wrap;line-height:1.5">${cierre.recomendacion}</div>
+          </div>` : ''}
+      </div>`;
+  } else {
+    cierreEl.style.display = 'block';
+    cierreEl.innerHTML = `
+      <div style="border:1px solid var(--g2);background:var(--pn);border-radius:8px;padding:12px;margin-top:8px;font-size:12px;color:#8b949e">
+        Este ticket todavía no tiene cierre técnico registrado.
+      </div>`;
+  }
 
   document.getElementById('topo-panel').style.display = 'block';
   document.getElementById('topo-panel').scrollIntoView({ behavior: 'smooth' });
