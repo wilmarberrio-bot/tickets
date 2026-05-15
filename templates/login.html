@@ -59,6 +59,8 @@ input:focus,select:focus{border-color:#58a6ff}
         <option value="{{ tec.id }}">{{ tec.nombre }} {% if tec.zona %}({{ tec.zona }}){% endif %}</option>
         {% endfor %}
       </select>
+      <label>PIN técnico</label>
+      <input type="password" name="pin_tecnico" placeholder="3 o 4 dígitos" maxlength="4" inputmode="numeric" autocomplete="current-password" required>
       <button type="submit" class="btn btn-tec">Entrar como Técnico →</button>
       <p class="hint">Solo verás los tickets asignados a ti</p>
     </form>
