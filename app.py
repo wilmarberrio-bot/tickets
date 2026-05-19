@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from flask import (Flask, render_template, request, jsonify,
                    session, redirect, url_for, abort, Response, send_file)
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
 
 TZ_CO = ZoneInfo("America/Bogota")
 
@@ -64,6 +65,7 @@ class Tecnico(db.Model):
     zona      = db.Column(db.String(60))
     telefono  = db.Column(db.String(20))
     slack_id  = db.Column(db.String(20))
+    pin_hash  = db.Column(db.String(255))
     activo    = db.Column(db.Boolean, default=True)
     creado    = db.Column(db.DateTime, default=now_colombia)
     tickets   = db.relationship('Ticket', backref='tecnico_rel', lazy=True)
@@ -461,10 +463,29 @@ def do_login():
         return redirect(url_for('coordinador'))
     if rol == 'tecnico':
         tec = Tecnico.query.get(request.form.get('tecnico_id'))
+        pin = request.form.get('pin_tecnico', '').strip()
+
         if not tec or not tec.activo:
-            return render_template('login.html',
-                                   tecnicos=Tecnico.query.filter_by(activo=True).all(),
-                                   error='Técnico no encontrado')
+            return render_template(
+                'login.html',
+                tecnicos=Tecnico.query.filter_by(activo=True).order_by(Tecnico.nombre).all(),
+                error='Técnico no encontrado'
+            )
+
+        if not tec.pin_hash:
+            return render_template(
+                'login.html',
+                tecnicos=Tecnico.query.filter_by(activo=True).order_by(Tecnico.nombre).all(),
+                error='Este técnico aún no tiene PIN asignado. Contacta al coordinador.'
+            )
+
+        if not check_password_hash(tec.pin_hash, pin):
+            return render_template(
+                'login.html',
+                tecnicos=Tecnico.query.filter_by(activo=True).order_by(Tecnico.nombre).all(),
+                error='PIN de técnico incorrecto'
+            )
+
         session.update({'rol': 'tecnico', 'tecnico_id': tec.id, 'nombre': tec.nombre})
         return redirect(url_for('tecnico'))
     return redirect(url_for('login'))
@@ -683,10 +704,26 @@ def get_tecnicos():
 @require_login(['coordinador'])
 def crear_tecnico():
     data = request.json or {}
-    if not data.get('nombre'): return jsonify({'error': 'Nombre obligatorio'}), 400
-    t = Tecnico(nombre=data['nombre'], zona=data.get('zona'), telefono=data.get('telefono'),
-                slack_id=data.get('slack_id'), activo=True)
-    db.session.add(t); db.session.commit()
+    nombre = data.get('nombre', '').strip()
+    pin = str(data.get('pin', '')).strip()
+
+    if not nombre:
+        return jsonify({'error': 'Nombre obligatorio'}), 400
+
+    if not re.fullmatch(r'\d{3,4}', pin):
+        return jsonify({'error': 'El PIN del técnico debe tener 3 o 4 dígitos numéricos'}), 400
+
+    t = Tecnico(
+        nombre=nombre,
+        zona=data.get('zona'),
+        telefono=data.get('telefono'),
+        slack_id=data.get('slack_id'),
+        pin_hash=generate_password_hash(pin),
+        activo=True
+    )
+    db.session.add(t)
+    log_actividad(f"Técnico {t.nombre} creado con PIN asignado", 'assign', None, session.get('nombre'))
+    db.session.commit()
     return jsonify(t.to_dict()), 201
 
 
@@ -694,8 +731,18 @@ def crear_tecnico():
 @require_login(['coordinador'])
 def actualizar_tecnico(tid):
     t = Tecnico.query.get_or_404(tid)
+    data = request.json or {}
+
     for f in ['nombre', 'zona', 'telefono', 'slack_id', 'activo']:
-        if f in (request.json or {}): setattr(t, f, request.json[f])
+        if f in data:
+            setattr(t, f, data[f])
+
+    pin = str(data.get('pin', '')).strip()
+    if pin:
+        if not re.fullmatch(r'\d{3,4}', pin):
+            return jsonify({'error': 'El PIN debe tener 3 o 4 dígitos numéricos'}), 400
+        t.pin_hash = generate_password_hash(pin)
+
     db.session.commit()
     return jsonify(t.to_dict())
 
@@ -1285,6 +1332,9 @@ def ensure_schema_updates():
         with db.engine.begin() as conn:
             conn.exec_driver_sql(
                 "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS zona VARCHAR(50)"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tecnicos ADD COLUMN IF NOT EXISTS pin_hash VARCHAR(255)"
             )
     except Exception as e:
         print(f"[WARN] No se pudo actualizar schema: {e}")
