@@ -260,6 +260,7 @@ Usuarios afectados:
       <div class="mf"><label>Teléfono</label><input type="tel" id="nt-tel" placeholder="+573001234567"></div>
     </div>
     <div class="mf"><label>Slack User ID</label><input type="text" id="nt-slack" placeholder="U08AB1234 (opcional)"></div>
+    <div class="mf"><label>PIN de acceso técnico *</label><input type="password" id="nt-pin" placeholder="3 o 4 dígitos" maxlength="4" inputmode="numeric"></div>
     <div class="mbtns">
       <button class="btn btn-g" onclick="closeModal('m-nuevo-tec')">Cancelar</button>
       <button class="btn btn-a" onclick="crearTecnico()">✅ Agregar Técnico</button>
@@ -282,6 +283,7 @@ Usuarios afectados:
       <div class="mf"><label>Teléfono</label><input type="tel" id="et-tel"></div>
     </div>
     <div class="mf"><label>Slack User ID</label><input type="text" id="et-slack"></div>
+    <div class="mf"><label>Nuevo PIN técnico</label><input type="password" id="et-pin" placeholder="Dejar vacío para no cambiar" maxlength="4" inputmode="numeric"></div>
     <div class="mf"><label>Estado</label>
       <select id="et-activo"><option value="true">✅ Activo</option><option value="false">❌ Inactivo</option></select></div>
     <div class="mbtns">
@@ -875,7 +877,9 @@ async function loadTecnicos() {
 
 async function crearTecnico() {
   const nombre = document.getElementById('nt-nombre').value.trim();
+  const pin = document.getElementById('nt-pin').value.trim();
   if (!nombre) { toast('El nombre es obligatorio', 'err'); return; }
+  if (!/^\d{3,4}$/.test(pin)) { toast('El PIN debe tener 3 o 4 dígitos numéricos', 'err'); return; }
   try {
     await api('/api/tecnicos', {
       method: 'POST',
@@ -884,11 +888,12 @@ async function crearTecnico() {
         zona:     document.getElementById('nt-zona').value,
         telefono: document.getElementById('nt-tel').value,
         slack_id: document.getElementById('nt-slack').value,
+        pin,
       }
     });
     closeModal('m-nuevo-tec');
     toast(`✅ Técnico ${nombre} agregado`, 'ok');
-    ['nt-nombre','nt-tel','nt-slack'].forEach(id => document.getElementById(id).value='');
+    ['nt-nombre','nt-tel','nt-slack','nt-pin'].forEach(id => document.getElementById(id).value='');
     document.getElementById('nt-zona').value='';
     loadTecnicos();
   } catch(e) { toast('Error: ' + e.message, 'err'); }
@@ -902,6 +907,7 @@ function editarTecnico(id) {
   document.getElementById('et-zona').value   = t.zona || '';
   document.getElementById('et-tel').value    = t.telefono || '';
   document.getElementById('et-slack').value  = t.slack_id || '';
+  document.getElementById('et-pin').value    = '';
   document.getElementById('et-activo').value = String(t.activo);
   document.getElementById('m-editar-tec').classList.add('on');
 }
@@ -919,6 +925,7 @@ async function guardarTecnico() {
         telefono: document.getElementById('et-tel').value,
         slack_id: document.getElementById('et-slack').value,
         activo:   document.getElementById('et-activo').value === 'true',
+        pin:      document.getElementById('et-pin').value,
       }
     });
     closeModal('m-editar-tec');
