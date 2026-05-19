@@ -3,13 +3,12 @@ Torre de Control FTTH — Somos Internet  v2.0
 Flask backend con roles, exportación, archivo mensual y KPIs históricos
 """
 
-import os, re, json, csv, io, traceback
+import os, re, json, csv, io, traceback, urllib.request, urllib.error
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from flask import (Flask, render_template, request, jsonify,
                    session, redirect, url_for, abort, Response, send_file)
 from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash, check_password_hash
 
 TZ_CO = ZoneInfo("America/Bogota")
 
@@ -65,7 +64,6 @@ class Tecnico(db.Model):
     zona      = db.Column(db.String(60))
     telefono  = db.Column(db.String(20))
     slack_id  = db.Column(db.String(20))
-    pin_hash  = db.Column(db.String(255))
     activo    = db.Column(db.Boolean, default=True)
     creado    = db.Column(db.DateTime, default=now_colombia)
     tickets   = db.relationship('Ticket', backref='tecnico_rel', lazy=True)
@@ -83,7 +81,6 @@ class Tecnico(db.Model):
         return {
             'id': self.id, 'nombre': self.nombre, 'zona': self.zona,
             'telefono': self.telefono, 'slack_id': self.slack_id,
-            'has_pin': bool(self.pin_hash),
             'activo': self.activo, 'tickets_mes': tickets_mes, 'en_curso': en_curso
         }
 
@@ -245,6 +242,36 @@ def log_actividad(texto, tipo, ticket_id=None, usuario=None):
         ip=request.remote_addr if request else None
     )
     db.session.add(act)
+
+
+def sync_ticket_to_sheets(ticket, action='upsert'):
+    """Envía una copia del ticket a Google Sheets vía Apps Script.
+
+    Es opcional: si GOOGLE_SHEETS_WEBHOOK_URL no existe, no hace nada.
+    No debe romper la operación principal si Google falla.
+    """
+    url = os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip()
+    if not url:
+        return
+
+    try:
+        payload = json.dumps({
+            'action': action,
+            'ticket': ticket.to_dict(),
+            'synced_at': now_colombia().isoformat()
+        }, ensure_ascii=False).encode('utf-8')
+
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status >= 400:
+                print(f"[WARN] Google Sheets sync HTTP {resp.status}")
+    except Exception as e:
+        print(f"[WARN] No se pudo sincronizar ticket con Google Sheets: {e}")
 
 
 def evaluar_reincidencia(ticket):
@@ -434,29 +461,10 @@ def do_login():
         return redirect(url_for('coordinador'))
     if rol == 'tecnico':
         tec = Tecnico.query.get(request.form.get('tecnico_id'))
-        pin = request.form.get('pin_tecnico', '').strip()
-
         if not tec or not tec.activo:
-            return render_template(
-                'login.html',
-                tecnicos=Tecnico.query.filter_by(activo=True).order_by(Tecnico.nombre).all(),
-                error='Técnico no encontrado'
-            )
-
-        if not tec.pin_hash:
-            return render_template(
-                'login.html',
-                tecnicos=Tecnico.query.filter_by(activo=True).order_by(Tecnico.nombre).all(),
-                error='Este técnico aún no tiene PIN asignado. Contacta al coordinador.'
-            )
-
-        if not check_password_hash(tec.pin_hash, pin):
-            return render_template(
-                'login.html',
-                tecnicos=Tecnico.query.filter_by(activo=True).order_by(Tecnico.nombre).all(),
-                error='PIN de técnico incorrecto'
-            )
-
+            return render_template('login.html',
+                                   tecnicos=Tecnico.query.filter_by(activo=True).all(),
+                                   error='Técnico no encontrado')
         session.update({'rol': 'tecnico', 'tecnico_id': tec.id, 'nombre': tec.nombre})
         return redirect(url_for('tecnico'))
     return redirect(url_for('login'))
@@ -551,6 +559,7 @@ def crear_ticket():
     evaluar_reincidencia(t)
     log_actividad(f"Nuevo ticket #{t.slack_num or t.id} — {t.site} {t.torre}", 'new', t.id, session.get('nombre'))
     db.session.commit()
+    sync_ticket_to_sheets(t, 'created_manual')
     return jsonify(t.to_dict()), 201
 
 
@@ -570,6 +579,7 @@ def asignar_ticket(tid):
     t.tecnico_id = tec.id; t.estado = 'EN_TRANSITO'; t.fecha_asignacion = now_colombia()
     log_actividad(f"{tec.nombre} asignado a #{t.slack_num or t.id} — {t.site}", 'assign', t.id, session.get('nombre'))
     db.session.commit()
+    sync_ticket_to_sheets(t, 'assigned')
     return jsonify(t.to_dict())
 
 
@@ -581,6 +591,7 @@ def marcar_en_sitio(tid):
     t.estado = 'EN_SITIO'; t.fecha_llegada = now_colombia()
     log_actividad(f"Llegada a sitio — #{t.slack_num or t.id} {t.site}", 'assign', t.id, session.get('nombre'))
     db.session.commit()
+    sync_ticket_to_sheets(t, 'en_sitio')
     return jsonify(t.to_dict())
 
 
@@ -609,6 +620,41 @@ def cerrar_ticket(tid):
     log_actividad(f"Ticket #{t.slack_num or t.id} {data['estado_final'].lower()} — {t.site} | {data['causa_raiz']}",
                   'closed' if data['estado_final'] == 'CERRADO' else 'alert', t.id, session.get('nombre'))
     db.session.commit()
+    sync_ticket_to_sheets(t, 'closed')
+    return jsonify(t.to_dict())
+
+
+@app.route('/api/tickets/<int:tid>/estado', methods=['PUT'])
+@require_login(['coordinador'])
+def cambiar_estado_ticket(tid):
+    t = Ticket.query.get_or_404(tid)
+    data = request.json or {}
+    nuevo_estado = data.get('estado')
+
+    estados_validos = ['ABIERTO', 'EN_TRANSITO', 'EN_SITIO', 'ESCALADO']
+    if nuevo_estado not in estados_validos:
+        return jsonify({'error': 'Estado inválido. Usa ABIERTO, EN_TRANSITO, EN_SITIO o ESCALADO.'}), 400
+
+    estado_anterior = t.estado
+    t.estado = nuevo_estado
+
+    if nuevo_estado == 'EN_TRANSITO' and not t.fecha_asignacion:
+        t.fecha_asignacion = now_colombia()
+    if nuevo_estado == 'EN_SITIO' and not t.fecha_llegada:
+        t.fecha_llegada = now_colombia()
+    if nuevo_estado == 'ABIERTO':
+        t.fecha_llegada = None
+        t.fecha_cierre = None
+
+    log_actividad(
+        f"Coordinador cambió estado de #{t.slack_num or t.id} de {estado_anterior} a {nuevo_estado} — {t.site}",
+        'assign' if nuevo_estado in ['EN_TRANSITO', 'EN_SITIO'] else 'alert',
+        t.id,
+        session.get('nombre')
+    )
+
+    db.session.commit()
+    sync_ticket_to_sheets(t, 'status_changed')
     return jsonify(t.to_dict())
 
 
@@ -637,26 +683,10 @@ def get_tecnicos():
 @require_login(['coordinador'])
 def crear_tecnico():
     data = request.json or {}
-    nombre = data.get('nombre', '').strip()
-    pin = str(data.get('pin', '')).strip()
-
-    if not nombre:
-        return jsonify({'error': 'Nombre obligatorio'}), 400
-
-    if not re.fullmatch(r'\d{3,4}', pin):
-        return jsonify({'error': 'El PIN del técnico debe tener 3 o 4 dígitos numéricos'}), 400
-
-    t = Tecnico(
-        nombre=nombre,
-        zona=data.get('zona'),
-        telefono=data.get('telefono'),
-        slack_id=data.get('slack_id'),
-        pin_hash=generate_password_hash(pin),
-        activo=True
-    )
-    db.session.add(t)
-    log_actividad(f"Técnico {t.nombre} creado con PIN asignado", 'assign', None, session.get('nombre'))
-    db.session.commit()
+    if not data.get('nombre'): return jsonify({'error': 'Nombre obligatorio'}), 400
+    t = Tecnico(nombre=data['nombre'], zona=data.get('zona'), telefono=data.get('telefono'),
+                slack_id=data.get('slack_id'), activo=True)
+    db.session.add(t); db.session.commit()
     return jsonify(t.to_dict()), 201
 
 
@@ -664,18 +694,8 @@ def crear_tecnico():
 @require_login(['coordinador'])
 def actualizar_tecnico(tid):
     t = Tecnico.query.get_or_404(tid)
-    data = request.json or {}
-
     for f in ['nombre', 'zona', 'telefono', 'slack_id', 'activo']:
-        if f in data:
-            setattr(t, f, data[f])
-
-    pin = str(data.get('pin', '')).strip()
-    if pin:
-        if not re.fullmatch(r'\d{3,4}', pin):
-            return jsonify({'error': 'El PIN debe tener 3 o 4 dígitos numéricos'}), 400
-        t.pin_hash = generate_password_hash(pin)
-
+        if f in (request.json or {}): setattr(t, f, request.json[f])
     db.session.commit()
     return jsonify(t.to_dict())
 
@@ -1244,6 +1264,7 @@ def webhook_slack():
     evaluar_reincidencia(t)
     log_actividad(f"Ticket #{t.slack_num or t.id} desde Slack — {t.site} {t.torre}", 'new', t.id, 'Slack Bot')
     db.session.commit()
+    sync_ticket_to_sheets(t, 'created_slack')
     return jsonify({'created': True, 'ticket_id': t.id, 'slack_num': t.slack_num}), 201
 
 
@@ -1264,9 +1285,6 @@ def ensure_schema_updates():
         with db.engine.begin() as conn:
             conn.exec_driver_sql(
                 "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS zona VARCHAR(50)"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tecnicos ADD COLUMN IF NOT EXISTS pin_hash VARCHAR(255)"
             )
     except Exception as e:
         print(f"[WARN] No se pudo actualizar schema: {e}")
