@@ -10,6 +10,7 @@ from flask import (Flask, render_template, request, jsonify,
                    session, redirect, url_for, abort, Response, send_file)
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.exceptions import HTTPException
 
 TZ_CO = ZoneInfo("America/Bogota")
 
@@ -32,29 +33,40 @@ db = SQLAlchemy(app)
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(e):
-    """Devuelve errores reales en endpoints API para depurar desde el frontend."""
+    """Devuelve errores reales en endpoints API sin convertir 404 normales en 500."""
+    if isinstance(e, HTTPException):
+        if request.path.startswith('/api/') or request.path.startswith('/webhook/'):
+            db.session.rollback()
+            return jsonify({
+                'error': e.description,
+                'code': e.code,
+                'type': e.__class__.__name__,
+                'path': request.path,
+            }), e.code
+        return e
+
+    db.session.rollback()
+    print('ERROR REAL:', repr(e))
+    traceback.print_exc()
+
     if request.path.startswith('/api/') or request.path.startswith('/webhook/'):
-        db.session.rollback()
-        status = getattr(e, 'code', 500)
         return jsonify({
             'error': str(e),
             'type': e.__class__.__name__,
             'path': request.path,
             'trace': traceback.format_exc().splitlines()[-8:],
-        }), status
-    raise e
-
-
-@app.errorhandler(500)
-def handle_500(e):
-    if request.path.startswith('/api/') or request.path.startswith('/webhook/'):
-        db.session.rollback()
-        return jsonify({
-            'error': str(e),
-            'type': e.__class__.__name__,
-            'path': request.path,
         }), 500
-    return e
+
+    return jsonify({
+        'error': 'Error interno del servidor',
+        'type': e.__class__.__name__,
+        'path': request.path,
+    }), 500
+
+
+@app.route('/favicon.ico')
+def favicon():
+    return ('', 204)
 
 # ─── Modelos ──────────────────────────────────────────
 
@@ -250,11 +262,12 @@ def sync_ticket_to_sheets(ticket, action='upsert'):
     """Envía una copia del ticket a Google Sheets vía Apps Script.
 
     Es opcional: si GOOGLE_SHEETS_WEBHOOK_URL no existe, no hace nada.
-    No debe romper la operación principal si Google falla.
+    No rompe la operación principal si Google falla.
+    Retorna (ok, mensaje) para que la sincronización manual pueda mostrar errores reales.
     """
     url = os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip()
     if not url:
-        return
+        return False, 'GOOGLE_SHEETS_WEBHOOK_URL no está configurada en Render'
 
     try:
         payload = json.dumps({
@@ -269,11 +282,22 @@ def sync_ticket_to_sheets(ticket, action='upsert'):
             headers={'Content-Type': 'application/json'},
             method='POST'
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            body = resp.read().decode('utf-8', errors='replace')
             if resp.status >= 400:
-                print(f"[WARN] Google Sheets sync HTTP {resp.status}")
+                msg = f"Google Sheets sync HTTP {resp.status}: {body[:300]}"
+                print(f"[WARN] {msg}")
+                return False, msg
+            return True, body[:300] or 'OK'
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode('utf-8', errors='replace') if hasattr(e, 'read') else ''
+        msg = f"HTTP {e.code}: {detail[:300]}"
+        print(f"[WARN] No se pudo sincronizar ticket con Google Sheets: {msg}")
+        return False, msg
     except Exception as e:
-        print(f"[WARN] No se pudo sincronizar ticket con Google Sheets: {e}")
+        msg = str(e)
+        print(f"[WARN] No se pudo sincronizar ticket con Google Sheets: {msg}")
+        return False, msg
 
 
 def evaluar_reincidencia(ticket):
@@ -540,6 +564,58 @@ def get_tickets():
     if request.args.get('estado') and request.args['estado'] != 'all':
         q = q.filter(Ticket.estado == request.args['estado'])
     return jsonify([t.to_dict() for t in q.order_by(Ticket.fecha_apertura.desc()).all()])
+
+
+@app.route('/api/sheets/sync-all', methods=['POST'])
+@require_login(['coordinador'])
+def sync_all_tickets_to_sheets():
+    """Sincroniza manualmente todos los tickets actuales con Google Sheets."""
+    if not os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip():
+        return jsonify({
+            'error': 'GOOGLE_SHEETS_WEBHOOK_URL no está configurada en Render'
+        }), 400
+
+    data = request.json or {}
+    q = Ticket.query
+
+    desde = data.get('desde')
+    hasta = data.get('hasta')
+    if desde:
+        q = q.filter(Ticket.fecha_apertura >= datetime.fromisoformat(desde))
+    if hasta:
+        q = q.filter(Ticket.fecha_apertura < datetime.fromisoformat(hasta) + timedelta(days=1))
+
+    tickets = q.order_by(Ticket.fecha_apertura.asc()).all()
+    ok_count = 0
+    failed = []
+
+    for t in tickets:
+        ok, msg = sync_ticket_to_sheets(t, 'manual_sync')
+        if ok:
+            ok_count += 1
+        else:
+            failed.append({
+                'ticket_id': t.id,
+                'slack_num': t.slack_num,
+                'error': msg
+            })
+
+    log_actividad(
+        f"Sincronización manual Google Sheets: {ok_count}/{len(tickets)} tickets",
+        'assign' if not failed else 'alert',
+        None,
+        session.get('nombre')
+    )
+    db.session.commit()
+
+    status = 200 if not failed else 207
+    return jsonify({
+        'ok': len(failed) == 0,
+        'total': len(tickets),
+        'synced': ok_count,
+        'failed': failed[:20],
+        'failed_count': len(failed)
+    }), status
 
 
 @app.route('/api/tickets', methods=['POST'])
