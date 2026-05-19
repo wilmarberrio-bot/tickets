@@ -5,6 +5,55 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Torre de Control FTTH — Técnico</title>
 <link rel="stylesheet" href="/static/style.css">
+
+<style>
+/* Mejoras móviles para Panel Técnico */
+.mobile-cards{display:none}
+.mobile-ticket-card{background:var(--pn);border:1px solid var(--g2);border-radius:14px;padding:12px;margin-bottom:10px;box-shadow:0 8px 18px rgba(0,0,0,.18)}
+.mobile-ticket-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:8px}
+.mobile-ticket-id{color:var(--az2);font-weight:800;font-size:13px}
+.mobile-ticket-site{font-size:14px;font-weight:700;color:#e6edf3;line-height:1.25;margin-bottom:3px}
+.mobile-ticket-meta{font-size:11px;color:#8b949e;line-height:1.45}
+.mobile-ticket-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+.mobile-info-pill{background:var(--g1);border:1px solid var(--g2);border-radius:10px;padding:8px}
+.mobile-info-pill .mini-lbl{font-size:9px;color:#8b949e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
+.mobile-info-pill .mini-val{font-size:12px;color:#e6edf3;font-weight:650;word-break:break-word}
+.mobile-ticket-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.mobile-ticket-actions .btn{flex:1;justify-content:center;padding:10px 12px;font-size:12px;min-height:40px}
+.mobile-secondary{display:flex;gap:8px;margin-top:8px}
+.mobile-secondary .btn{flex:1;justify-content:center}
+.mobile-section-title{display:none;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin:10px 2px 8px}
+@media (max-width: 720px){
+  body{padding-bottom:18px}
+  .hdr{align-items:flex-start;gap:8px;padding:10px 12px;position:sticky;top:0;z-index:50;background:rgba(13,17,23,.96);backdrop-filter:blur(8px)}
+  .hdr h1{font-size:15px}
+  .hdr>div:first-child{gap:8px;flex-wrap:wrap}
+  .hdr-r{width:100%;justify-content:space-between;font-size:11px;gap:8px;flex-wrap:wrap}
+  .tabs{position:sticky;top:58px;z-index:45;overflow-x:auto;white-space:nowrap;padding:8px 10px;background:rgba(13,17,23,.96);border-bottom:1px solid var(--g2)}
+  .tab{font-size:12px;padding:9px 11px;border-radius:999px}
+  .content{padding:10px}
+  .kpi-row{display:grid!important;grid-template-columns:repeat(2,1fr)!important;gap:8px;margin-bottom:10px}
+  .kpi{padding:10px;border-radius:12px}
+  .kpi .val{font-size:20px!important}
+  .panel{border-radius:14px;margin-bottom:12px;overflow:hidden}
+  .ph{padding:10px 12px;gap:8px;align-items:center}
+  .ph h3{font-size:13px}
+  .tw{display:none}
+  .mobile-cards{display:block;padding:10px 10px 12px}
+  .mobile-section-title{display:block}
+  #detalle-panel .ph{position:sticky;top:105px;background:var(--pn);z-index:20}
+  #detalle-panel>div[style*="grid-template-columns"]{display:block!important;padding:12px!important}
+  .topo{overflow-x:auto}
+  .mf label{font-size:11px}
+  .mf input,.mf select,.mf textarea,textarea,input,select{font-size:16px!important;min-height:42px}
+  .check-grid{grid-template-columns:1fr!important;gap:8px}
+  .ci{padding:10px;border:1px solid var(--g2);border-radius:10px;background:var(--g1)}
+  #tab-cerrar .panel>div[style*="padding:14px"]{padding:12px!important}
+  #tab-cerrar div[style*="grid-template-columns:1fr 1fr 1fr"]{display:block!important}
+  #tab-cerrar div[style*="display:flex;gap:10px"] .btn{width:100%;flex:1 1 100%!important;margin-bottom:6px}
+  .toast{left:10px!important;right:10px!important;bottom:12px!important;width:auto!important;max-width:none!important}
+}
+</style>
 </head>
 <body>
 
@@ -56,6 +105,8 @@
         <tbody id="mis-tbody"></tbody>
       </table>
     </div>
+    <div class="mobile-section-title">Tickets activos</div>
+    <div id="mis-cards" class="mobile-cards"></div>
   </div>
 
   <!-- Detalle del ticket seleccionado -->
@@ -247,6 +298,73 @@ async function loadMisTickets() {
   updateCierreSelect();
 }
 
+
+function estadoLabel(estado) {
+  return (estado || '').replace('_', ' ');
+}
+
+function tiempoAbierto(t) {
+  const minutos = t.fecha_apertura ? Math.round((Date.now() - new Date(t.fecha_apertura)) / 60000) : 0;
+  return { minutos, h: Math.floor(minutos / 60), m: minutos % 60 };
+}
+
+function accionesTicketTecnico(t) {
+  if (t.estado === 'EN_TRANSITO') {
+    return `<button class="btn btn-a btn-sm" onclick="marcarEnSitio(${t.id})">📍 Llegué al sitio</button>`;
+  }
+  if (t.estado === 'EN_SITIO') {
+    return `<button class="btn btn-c btn-sm" onclick="irACierre(${t.id})">📋 Cerrar</button>`;
+  }
+  if (t.estado === 'ABIERTO') {
+    return `<span style="color:var(--am2);font-size:10px">⏳ Esperando confirmación</span>`;
+  }
+  return `<span style="color:#8b949e;font-size:10px">✓ ${t.estado}</span>`;
+}
+
+function renderMobileCards() {
+  const cont = document.getElementById('mis-cards');
+  if (!cont) return;
+  if (!MIS_TICKETS.length) {
+    cont.innerHTML = '<div class="empty">No tienes tickets asignados actualmente</div>';
+    return;
+  }
+
+  cont.innerHTML = MIS_TICKETS.map(t => {
+    const time = tiempoAbierto(t);
+    const tStr = t.estado === 'CERRADO'
+      ? `✓ ${t.mttr_minutos ? Math.floor(t.mttr_minutos/60)+'h '+t.mttr_minutos%60+'m' : '—'}`
+      : `${time.h > 0 ? time.h + 'h ' : ''}${time.m}m`;
+    const timeColor = t.estado === 'CERRADO' ? 'var(--vd2)' : (time.minutos > 120 ? 'var(--rj2)' : time.minutos > 60 ? 'var(--am2)' : 'var(--vd2)');
+    const semC = {ROJO:'sr',AMARILLO:'sy',VERDE:'sg'}[t.semaforo] || 'sg';
+    const accs = accionesTicketTecnico(t);
+
+    return `<div class="mobile-ticket-card">
+      <div class="mobile-ticket-top">
+        <div>
+          <div class="mobile-ticket-id" onclick="verDetalle(${t.id})">#${t.slack_num || t.id}</div>
+          <div class="mobile-ticket-site">${t.site || 'Sin site'}</div>
+          <div class="mobile-ticket-meta">${t.torre || 'Sin torre'} · ${t.zona || 'Sin zona'}</div>
+        </div>
+        <span class="sb sb-${t.estado}">${estadoLabel(t.estado)}</span>
+      </div>
+
+      <div class="mobile-ticket-grid">
+        <div class="mobile-info-pill"><div class="mini-lbl">Falla</div><div class="mini-val">${t.tipo || '—'}</div></div>
+        <div class="mobile-info-pill"><div class="mini-lbl">Afectados</div><div class="mini-val" style="color:${t.afectados>=5?'var(--rj2)':'var(--am2)'}">${t.afectados || 0}</div></div>
+        <div class="mobile-info-pill"><div class="mini-lbl">ACC / IP</div><div class="mini-val">${t.acc_nombre || '—'}<br>${t.acc_ip || '—'}</div></div>
+        <div class="mobile-info-pill"><div class="mini-lbl">Tiempo</div><div class="mini-val" style="color:${timeColor}">${tStr}</div></div>
+      </div>
+
+      <div class="mobile-ticket-meta"><span class="sem ${semC}"></span> ${t.es_reincidente ? 'Reincidente / revisar historial' : 'Sin reincidencia marcada'} ${t.motivo_reincidencia ? ' · ' + t.motivo_reincidencia : ''}</div>
+      <div class="mobile-ticket-actions">${accs}</div>
+      <div class="mobile-secondary">
+        <button class="btn btn-g btn-sm" onclick="verDetalle(${t.id})">👁 Ver detalle</button>
+        ${t.ubicacion_url ? `<a class="btn btn-g btn-sm" href="${t.ubicacion_url}" target="_blank">📍 Maps</a>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function renderMisTickets() {
   const activos   = MIS_TICKETS.filter(t => t.estado !== 'CERRADO' && t.estado !== 'ESCALADO');
   const cerradosH = MIS_TICKETS.filter(t => {
@@ -285,15 +403,7 @@ function renderMisTickets() {
           : `<span style="color:${abierto>120?'var(--rj2)':abierto>60?'var(--am2)':'var(--vd2)'}">${h>0?h+'h ':''} ${m}m</span>`;
         const semC = {ROJO:'sr',AMARILLO:'sy',VERDE:'sg'}[t.semaforo]||'sg';
 
-        let accs = '';
-        if (t.estado==='EN_TRANSITO')
-          accs = `<button class="btn btn-a btn-sm" onclick="marcarEnSitio(${t.id})">📍 Llegué al sitio</button>`;
-        else if (t.estado==='EN_SITIO')
-          accs = `<button class="btn btn-c btn-sm" onclick="irACierre(${t.id})">📋 Cerrar</button>`;
-        else if (t.estado==='ABIERTO')
-          accs = `<span style="color:var(--am2);font-size:10px">⏳ Esperando confirmación</span>`;
-        else
-          accs = `<span style="color:#8b949e;font-size:10px">✓ ${t.estado}</span>`;
+        const accs = accionesTicketTecnico(t);
 
         return `<tr>
           <td><strong style="color:var(--az2);cursor:pointer" onclick="verDetalle(${t.id})">#${t.slack_num||t.id}</strong></td>
@@ -308,6 +418,8 @@ function renderMisTickets() {
         </tr>`;
       }).join('')
     : '<tr><td colspan="9" class="empty">No tienes tickets asignados actualmente</td></tr>';
+
+  renderMobileCards();
 }
 
 async function marcarEnSitio(id) {
@@ -332,12 +444,14 @@ function verDetalle(id) {
   document.getElementById('det-info').innerHTML = `
     <strong>Site:</strong> ${t.site}<br>
     <strong>Torre:</strong> ${t.torre||'—'}<br>
+    <strong>Zona:</strong> ${t.zona||'—'}<br>
     <strong>Tipo:</strong> ${t.tipo||'—'}<br>
     <strong>Afectados:</strong> <span style="color:var(--rj2)">${t.afectados}</span><br>
     <strong>Modelo:</strong> ${t.modelo||'—'}<br>
     <strong>Estado:</strong> <span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span><br>
     ${t.appointment_num ? `<strong>Appointment:</strong> #${t.appointment_num}<br>` : ''}
-    ${t.es_reincidente ? '<strong style="color:var(--rj2)">⚠ Site reincidente</strong><br>' : ''}
+    ${t.es_reincidente ? '<strong style="color:var(--rj2)">⚠ Reincidente</strong><br>' : ''}
+    ${t.motivo_reincidencia ? `<strong>Motivo reinc.:</strong> ${t.motivo_reincidencia}<br>` : ''}
   `;
   const ok = t.estado === 'CERRADO';
   document.getElementById('det-topo').innerHTML = `
