@@ -1155,6 +1155,7 @@ function injectExportBar() {
     <button class="btn-export btn-csv" onclick="exportarCSV()">📄 CSV</button>
     <button class="btn-export btn-excel" onclick="exportarExcel()">📊 Excel</button>
     <button class="btn-export btn-pdf" onclick="exportarPDF()">🖨 PDF / Imprimir</button>
+    <button class="btn-export btn-excel" onclick="sincronizarGoogleSheets()">🔄 Sincronizar Google Sheets</button>
   `;
   ticketsTab.insertBefore(bar, ticketsTab.firstChild);
 }
@@ -1182,6 +1183,27 @@ function exportarPDF() {
   const params = buildQueryParams();
   window.open('/api/export/pdf-report?' + params, '_blank');
   showToast('🖨 Abriendo reporte para impresión...', 'ok');
+}
+
+async function sincronizarGoogleSheets() {
+  if (!confirm('¿Sincronizar todos los tickets actuales con Google Sheets? Esto actualizará filas existentes y agregará las que falten.')) return;
+
+  try {
+    showToast('🔄 Sincronizando tickets con Google Sheets...', 'warn');
+    const res = await api('/api/sheets/sync-all', {
+      method: 'POST',
+      body: {}
+    });
+
+    if (res.failed_count && res.failed_count > 0) {
+      const firstError = res.failed?.[0]?.error || 'Revisa logs de Render';
+      showToast(`⚠️ Sincronizados ${res.synced}/${res.total}. Error: ${firstError}`, 'warn');
+    } else {
+      showToast(`✅ Google Sheets actualizado: ${res.synced}/${res.total} tickets`, 'ok');
+    }
+  } catch(e) {
+    showToast('Error real al sincronizar: ' + e.message, 'err');
+  }
 }
 
 // ── Eliminar ticket ───────────────────────────────────
