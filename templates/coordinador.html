@@ -260,7 +260,6 @@ Usuarios afectados:
       <div class="mf"><label>Teléfono</label><input type="tel" id="nt-tel" placeholder="+573001234567"></div>
     </div>
     <div class="mf"><label>Slack User ID</label><input type="text" id="nt-slack" placeholder="U08AB1234 (opcional)"></div>
-    <div class="mf"><label>PIN de acceso técnico *</label><input type="password" id="nt-pin" placeholder="3 o 4 dígitos" maxlength="4" inputmode="numeric"></div>
     <div class="mbtns">
       <button class="btn btn-g" onclick="closeModal('m-nuevo-tec')">Cancelar</button>
       <button class="btn btn-a" onclick="crearTecnico()">✅ Agregar Técnico</button>
@@ -283,7 +282,6 @@ Usuarios afectados:
       <div class="mf"><label>Teléfono</label><input type="tel" id="et-tel"></div>
     </div>
     <div class="mf"><label>Slack User ID</label><input type="text" id="et-slack"></div>
-    <div class="mf"><label>Nuevo PIN técnico</label><input type="password" id="et-pin" placeholder="Dejar vacío para no cambiar" maxlength="4" inputmode="numeric"></div>
     <div class="mf"><label>Estado</label>
       <select id="et-activo"><option value="true">✅ Activo</option><option value="false">❌ Inactivo</option></select></div>
     <div class="mbtns">
@@ -515,6 +513,15 @@ function renderTickets(all) {
     else
       acciones = `<span style="color:#8b949e;font-size:10px">✓</span>`;
 
+    const estadoSelect = `
+      <select class="estado-mini" onchange="cambiarEstadoTicket(${t.id}, this.value)" title="Cambiar estado desde coordinador">
+        <option value="">Cambiar estado</option>
+        <option value="ABIERTO" ${t.estado==='ABIERTO'?'disabled':''}>Abierto</option>
+        <option value="EN_TRANSITO" ${t.estado==='EN_TRANSITO'?'disabled':''}>En tránsito</option>
+        <option value="EN_SITIO" ${t.estado==='EN_SITIO'?'disabled':''}>En sitio</option>
+        <option value="ESCALADO" ${t.estado==='ESCALADO'?'disabled':''}>Escalado</option>
+      </select>`;
+
     return `<tr>
       <td><strong style="color:var(--az2);cursor:pointer" onclick="showTopo(${t.id})">#${t.slack_num||t.id}</strong></td>
       <td style="font-size:11px;color:#8b949e">${fecha}</td>
@@ -526,7 +533,7 @@ function renderTickets(all) {
       <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span></td>
       <td>${tStr}</td>
       <td><span class="sem ${semC}"></span> <span style="font-size:10px;color:#8b949e">ev.${t.evento_num}</span></td>
-      <td style="white-space:nowrap">${acciones}</td>
+      <td style="white-space:nowrap">${acciones}<br>${estadoSelect}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="11" class="empty">Sin tickets en el periodo seleccionado</td></tr>';
 }
@@ -575,6 +582,29 @@ async function confirmarAsignacion() {
     loadTickets();
     loadTecnicos();
   } catch(e) { toast('Error: ' + e.message, 'err'); }
+}
+
+async function cambiarEstadoTicket(id, estado) {
+  if (!estado) return;
+
+  const label = estado.replace('_', ' ').toLowerCase();
+  if (!confirm(`¿Cambiar este ticket a ${label}?`)) {
+    loadTickets();
+    return;
+  }
+
+  try {
+    await api(`/api/tickets/${id}/estado`, {
+      method: 'PUT',
+      body: { estado }
+    });
+    toast(`✅ Estado actualizado a ${label}`, 'ok');
+    loadTickets();
+    loadDashboard();
+  } catch(e) {
+    toast('Error real: ' + e.message, 'err');
+    loadTickets();
+  }
 }
 
 // ══════════════════════════════════════════
@@ -845,9 +875,7 @@ async function loadTecnicos() {
 
 async function crearTecnico() {
   const nombre = document.getElementById('nt-nombre').value.trim();
-  const pin = document.getElementById('nt-pin').value.trim();
   if (!nombre) { toast('El nombre es obligatorio', 'err'); return; }
-  if (!/^\d{3,4}$/.test(pin)) { toast('El PIN debe tener 3 o 4 dígitos numéricos', 'err'); return; }
   try {
     await api('/api/tecnicos', {
       method: 'POST',
@@ -856,12 +884,11 @@ async function crearTecnico() {
         zona:     document.getElementById('nt-zona').value,
         telefono: document.getElementById('nt-tel').value,
         slack_id: document.getElementById('nt-slack').value,
-        pin,
       }
     });
     closeModal('m-nuevo-tec');
     toast(`✅ Técnico ${nombre} agregado`, 'ok');
-    ['nt-nombre','nt-tel','nt-slack','nt-pin'].forEach(id => document.getElementById(id).value='');
+    ['nt-nombre','nt-tel','nt-slack'].forEach(id => document.getElementById(id).value='');
     document.getElementById('nt-zona').value='';
     loadTecnicos();
   } catch(e) { toast('Error: ' + e.message, 'err'); }
@@ -875,7 +902,6 @@ function editarTecnico(id) {
   document.getElementById('et-zona').value   = t.zona || '';
   document.getElementById('et-tel').value    = t.telefono || '';
   document.getElementById('et-slack').value  = t.slack_id || '';
-  document.getElementById('et-pin').value    = '';
   document.getElementById('et-activo').value = String(t.activo);
   document.getElementById('m-editar-tec').classList.add('on');
 }
@@ -893,7 +919,6 @@ async function guardarTecnico() {
         telefono: document.getElementById('et-tel').value,
         slack_id: document.getElementById('et-slack').value,
         activo:   document.getElementById('et-activo').value === 'true',
-        pin:      document.getElementById('et-pin').value,
       }
     });
     closeModal('m-editar-tec');
@@ -924,6 +949,8 @@ function toast(msg, type='ok') {
   el.textContent = msg; el.className = `toast ${type} show`;
   setTimeout(() => el.classList.remove('show'), 3500);
 }
+
+const showToast = toast;
 
 document.querySelectorAll('.overlay').forEach(el => {
   el.addEventListener('click', function(e) {
@@ -1011,6 +1038,9 @@ init();
 
 /* ── Tendencia chart ── */
 .chart-wrap{padding:14px;overflow-x:auto}
+
+.estado-mini{margin-top:5px;background:var(--g1);border:1px solid var(--g2);border-radius:5px;color:#e6edf3;font-size:10px;padding:4px 6px;max-width:115px}
+.estado-mini:focus{outline:none;border-color:var(--az2)}
 </style>
 
 <!-- MODAL: Confirmar eliminación ticket -->
