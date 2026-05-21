@@ -542,6 +542,62 @@ def get_tickets():
     return jsonify([t.to_dict() for t in q.order_by(Ticket.fecha_apertura.desc()).all()])
 
 
+@app.route('/api/sheets/sync-all', methods=['POST'])
+@require_login(['coordinador'])
+def sync_all_tickets_to_sheets():
+    """Sincroniza manualmente todos los tickets actuales con Google Sheets.
+
+    Sirve como botón de respaldo cuando se configura la URL de Apps Script
+    después de que ya existían tickets en PostgreSQL.
+    """
+    if not os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip():
+        return jsonify({
+            'error': 'GOOGLE_SHEETS_WEBHOOK_URL no está configurada en Render'
+        }), 400
+
+    data = request.json or {}
+    q = Ticket.query
+
+    desde = data.get('desde')
+    hasta = data.get('hasta')
+    if desde:
+        q = q.filter(Ticket.fecha_apertura >= datetime.fromisoformat(desde))
+    if hasta:
+        q = q.filter(Ticket.fecha_apertura < datetime.fromisoformat(hasta) + timedelta(days=1))
+
+    tickets = q.order_by(Ticket.fecha_apertura.asc()).all()
+    ok_count = 0
+    failed = []
+
+    for t in tickets:
+        ok, msg = sync_ticket_to_sheets(t, 'manual_sync')
+        if ok:
+            ok_count += 1
+        else:
+            failed.append({
+                'ticket_id': t.id,
+                'slack_num': t.slack_num,
+                'error': msg
+            })
+
+    log_actividad(
+        f"Sincronización manual Google Sheets: {ok_count}/{len(tickets)} tickets",
+        'assign' if not failed else 'alert',
+        None,
+        session.get('nombre')
+    )
+    db.session.commit()
+
+    status = 200 if not failed else 207
+    return jsonify({
+        'ok': len(failed) == 0,
+        'total': len(tickets),
+        'synced': ok_count,
+        'failed': failed[:20],
+        'failed_count': len(failed)
+    }), status
+
+
 @app.route('/api/tickets', methods=['POST'])
 @require_login(['coordinador'])
 def crear_ticket():
