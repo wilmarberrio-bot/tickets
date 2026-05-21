@@ -90,7 +90,6 @@
     <button class="qbtn"    onclick="setEst(this,'EN_SITIO')">🔵 En Sitio</button>
     <button class="qbtn"    onclick="setEst(this,'CERRADO')">🟢 Cerrados</button>
     <button class="qbtn"    onclick="setEst(this,'ESCALADO')">🟣 Escalados</button>
-    <button class="qbtn"    onclick="setEst(this,'CANCELADO')">⚫ Cancelados</button>
     <span id="tk-badge" style="margin-left:auto;font-size:11px;color:#8b949e">0 tickets</span>
   </div>
   <div class="panel">
@@ -507,14 +506,15 @@ function renderTickets(all) {
     const fecha = t.fecha_apertura ? new Date(t.fecha_apertura).toLocaleDateString('es-CO') : '—';
 
     let acciones = '';
-    if (t.estado === 'ABIERTO')
+    if (t.estado === 'ABIERTO') {
       acciones = `<button class="btn btn-a btn-sm" onclick="openAsignar(${t.id})">Asignar</button>`;
-    else if (t.estado === 'EN_TRANSITO')
-      acciones = `<span style="color:#8b949e;font-size:10px">En camino</span>`;
-    else if (t.estado === 'EN_SITIO')
-      acciones = `<span style="color:var(--az2);font-size:10px">En sitio</span>`;
-    else
+    } else if (t.estado === 'EN_TRANSITO') {
+      acciones = `<span style="color:#8b949e;font-size:10px">En camino</span><br><button class="btn btn-g btn-sm" style="margin-top:4px" onclick="openAsignar(${t.id})">Reasignar</button>`;
+    } else if (t.estado === 'EN_SITIO') {
+      acciones = `<span style="color:var(--az2);font-size:10px">En sitio</span><br><button class="btn btn-g btn-sm" style="margin-top:4px" onclick="openAsignar(${t.id})">Reasignar</button>`;
+    } else {
       acciones = `<span style="color:#8b949e;font-size:10px">✓</span>`;
+    }
 
     const estadoSelect = `
       <select class="estado-mini" onchange="cambiarEstadoTicket(${t.id}, this.value)" title="Cambiar estado desde coordinador">
@@ -523,7 +523,6 @@ function renderTickets(all) {
         <option value="EN_TRANSITO" ${t.estado==='EN_TRANSITO'?'disabled':''}>En tránsito</option>
         <option value="EN_SITIO" ${t.estado==='EN_SITIO'?'disabled':''}>En sitio</option>
         <option value="ESCALADO" ${t.estado==='ESCALADO'?'disabled':''}>Escalado</option>
-        <option value="CANCELADO" ${t.estado==='CANCELADO'?'disabled':''}>Cancelado</option>
       </select>`;
 
     return `<tr>
@@ -534,7 +533,7 @@ function renderTickets(all) {
       <td>${t.tipo||'—'}</td>
       <td style="font-weight:700;color:${t.afectados>=5?'var(--rj2)':'var(--am2)'}">${t.afectados}</td>
       <td>${t.tecnico_nombre ? `<span style="color:var(--az2)">${t.tecnico_nombre}</span>` : '<span style="color:var(--rj2);font-weight:700">⚠ Sin asignar</span>'}</td>
-      <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span>${t.estado==='CANCELADO' && t.motivo_cancelacion ? `<br><span style="font-size:10px;color:#8b949e" title="${escapeHtml(t.motivo_cancelacion)}">${escapeHtml(t.motivo_cancelacion).slice(0,32)}${t.motivo_cancelacion.length>32?'...':''}</span>` : ''}</td>
+      <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span></td>
       <td>${tStr}</td>
       <td><span class="sem ${semC}"></span> <span style="font-size:10px;color:#8b949e">ev.${t.evento_num}</span></td>
       <td style="white-space:nowrap">${acciones}<br>${estadoSelect}</td>
@@ -550,8 +549,11 @@ async function openAsignar(ticketId) {
   const t = TICKETS_CACHE.find(x => x.id === ticketId);
   if (!t) return;
 
+  const esReasignacion = !!t.tecnico_id;
+  document.querySelector('#m-asignar h2').textContent = esReasignacion ? '🔁 Reasignar Ticket' : '🎫 Asignar Ticket';
+  document.querySelector('#m-asignar .btn.btn-a').textContent = esReasignacion ? '🔁 Confirmar Reasignación' : '✅ Confirmar Asignación';
   document.getElementById('m-asignar-info').textContent =
-    `#${t.slack_num||t.id} — ${t.site} ${t.torre||''} | ${t.afectados} afectados | ${t.tipo}`;
+    `#${t.slack_num||t.id} — ${t.site} ${t.torre||''} | ${t.afectados} afectados | ${t.tipo}${t.tecnico_nombre ? ' | Actual: ' + t.tecnico_nombre : ''}`;
 
   // Historial del site
   const reinc = TICKETS_CACHE.filter(x => x.site === t.site && x.torre === t.torre);
@@ -568,23 +570,42 @@ async function openAsignar(ticketId) {
     TECNICOS_ALL.filter(t => t.activo).map(t =>
       `<option value="${t.id}">${t.nombre}${t.zona?' ('+t.zona+')':''} ${t.en_curso>0?'— EN CURSO':'— libre'}</option>`
     ).join('');
+  if (t.tecnico_id) sel.value = String(t.tecnico_id);
 
   document.getElementById('m-asignar-nota').value = '';
+  if (t.estado === 'EN_SITIO') {
+    document.getElementById('m-asignar-nota').placeholder = 'Recomendado: explica por qué se reasigna estando en sitio';
+    document.getElementById('m-asignar-hist').innerHTML += '<br><strong style="color:var(--am2)">⚠ Este ticket ya fue marcado en sitio. Al reasignarlo quedará EN TRÁNSITO para el nuevo técnico.</strong>';
+  } else {
+    document.getElementById('m-asignar-nota').placeholder = 'Ej: Técnico con novedad, reasignar por cercanía, error de asignación...';
+  }
   document.getElementById('m-asignar').classList.add('on');
 }
 
 async function confirmarAsignacion() {
   const tecId = document.getElementById('m-tec-sel').value;
   if (!tecId) { toast('Selecciona un técnico', 'err'); return; }
+
+  const t = TICKETS_CACHE.find(x => x.id === curTicketId);
+  const esReasignacion = t && t.tecnico_id && String(t.tecnico_id) !== String(tecId);
+  if (t && t.estado === 'EN_SITIO' && esReasignacion) {
+    const ok = confirm('Este ticket ya fue marcado EN SITIO. Si lo reasignas, quedará EN TRÁNSITO y el nuevo técnico deberá marcar llegada. ¿Confirmas?');
+    if (!ok) return;
+  }
+
   try {
     await api(`/api/tickets/${curTicketId}/asignar`, {
       method: 'PUT',
-      body: { tecnico_id: parseInt(tecId) }
+      body: {
+        tecnico_id: parseInt(tecId),
+        nota: document.getElementById('m-asignar-nota').value || ''
+      }
     });
     closeModal('m-asignar');
-    toast('✅ Ticket asignado correctamente', 'ok');
+    toast(esReasignacion ? '✅ Ticket reasignado correctamente' : '✅ Ticket asignado correctamente', 'ok');
     loadTickets();
     loadTecnicos();
+    loadDashboard();
   } catch(e) { toast('Error: ' + e.message, 'err'); }
 }
 
@@ -592,27 +613,7 @@ async function cambiarEstadoTicket(id, estado) {
   if (!estado) return;
 
   const label = estado.replace('_', ' ').toLowerCase();
-  let body = { estado };
-
-  if (estado === 'CANCELADO') {
-    const motivo = prompt('Motivo de cancelación. Ej: Cliente canceló visita, falso positivo, se resolvió remoto, ticket duplicado, no requiere desplazamiento.');
-    if (motivo === null) {
-      loadTickets();
-      return;
-    }
-    if (!motivo.trim() || motivo.trim().length < 10) {
-      toast('Debes escribir un motivo de cancelación de mínimo 10 caracteres', 'err');
-      loadTickets();
-      return;
-    }
-    body.motivo_cancelacion = motivo.trim();
-    if (!confirm(`¿Cancelar este ticket?
-
-Motivo: ${motivo.trim()}`)) {
-      loadTickets();
-      return;
-    }
-  } else if (!confirm(`¿Cambiar este ticket a ${label}?`)) {
+  if (!confirm(`¿Cambiar este ticket a ${label}?`)) {
     loadTickets();
     return;
   }
@@ -620,9 +621,9 @@ Motivo: ${motivo.trim()}`)) {
   try {
     await api(`/api/tickets/${id}/estado`, {
       method: 'PUT',
-      body
+      body: { estado }
     });
-    toast(estado === 'CANCELADO' ? '✅ Ticket cancelado con trazabilidad' : `✅ Estado actualizado a ${label}`, 'ok');
+    toast(`✅ Estado actualizado a ${label}`, 'ok');
     loadTickets();
     loadDashboard();
   } catch(e) {
@@ -973,15 +974,6 @@ function closeModal(id) {
   if (id === 'm-asignar') curTicketId = null;
 }
 
-function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
 function toast(msg, type='ok') {
   const el = document.getElementById('toast');
   el.textContent = msg; el.className = `toast ${type} show`;
@@ -1077,7 +1069,6 @@ init();
 /* ── Tendencia chart ── */
 .chart-wrap{padding:14px;overflow-x:auto}
 
-.sb-CANCELADO{color:#8b949e;border-color:#8b949e;background:#161b22}
 .estado-mini{margin-top:5px;background:var(--g1);border:1px solid var(--g2);border-radius:5px;color:#e6edf3;font-size:10px;padding:4px 6px;max-width:115px}
 .estado-mini:focus{outline:none;border-color:var(--az2)}
 </style>
