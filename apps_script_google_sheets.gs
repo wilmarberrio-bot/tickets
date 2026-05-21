@@ -24,6 +24,9 @@ const HEADERS = [
   'Fecha Llegada',
   'Fecha Cierre',
   'Estado',
+  'Fecha Cancelación',
+  'Motivo Cancelación',
+  'Cancelado Por',
   'Site',
   'Torre',
   'Zona',
@@ -37,8 +40,6 @@ const HEADERS = [
   'Técnico',
   'Semáforo',
   'Reincidente',
-  'Criterio Reincidencia',
-  'Motivo Reincidencia',
   'Evento #',
   'Observación',
   'Topología',
@@ -95,9 +96,10 @@ function getOrCreateSheet_(ss) {
     sheet.appendRow(HEADERS);
     sheet.setFrozenRows(1);
   } else {
-    const firstRow = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
-    if (String(firstRow[0] || '') !== HEADERS[0]) {
-      sheet.insertRowBefore(1);
+    const width = Math.max(sheet.getLastColumn(), HEADERS.length);
+    const firstRow = sheet.getRange(1, 1, 1, width).getValues()[0];
+    const mustRefreshHeaders = HEADERS.some((h, i) => String(firstRow[i] || '') !== h);
+    if (mustRefreshHeaders) {
       sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
       sheet.setFrozenRows(1);
     }
@@ -130,6 +132,9 @@ function buildRow_(t, action, syncedAt) {
     t.fecha_llegada || '',
     t.fecha_cierre || '',
     t.estado || '',
+    t.fecha_cancelacion || '',
+    t.motivo_cancelacion || '',
+    t.cancelado_por || '',
     t.site || '',
     t.torre || '',
     t.zona || '',
@@ -143,8 +148,6 @@ function buildRow_(t, action, syncedAt) {
     t.tecnico_nombre || '',
     t.semaforo || '',
     t.es_reincidente ? 'Sí' : 'No',
-    t.criterio_reincidencia || '',
-    t.motivo_reincidencia || '',
     t.evento_num || '',
     t.observacion || '',
     t.topologia_url || '',

@@ -10,7 +10,6 @@ from flask import (Flask, render_template, request, jsonify,
                    session, redirect, url_for, abort, Response, send_file)
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.exceptions import HTTPException
 
 TZ_CO = ZoneInfo("America/Bogota")
 
@@ -33,40 +32,29 @@ db = SQLAlchemy(app)
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(e):
-    """Devuelve errores reales en endpoints API sin convertir 404 normales en 500."""
-    if isinstance(e, HTTPException):
-        if request.path.startswith('/api/') or request.path.startswith('/webhook/'):
-            db.session.rollback()
-            return jsonify({
-                'error': e.description,
-                'code': e.code,
-                'type': e.__class__.__name__,
-                'path': request.path,
-            }), e.code
-        return e
-
-    db.session.rollback()
-    print('ERROR REAL:', repr(e))
-    traceback.print_exc()
-
+    """Devuelve errores reales en endpoints API para depurar desde el frontend."""
     if request.path.startswith('/api/') or request.path.startswith('/webhook/'):
+        db.session.rollback()
+        status = getattr(e, 'code', 500)
         return jsonify({
             'error': str(e),
             'type': e.__class__.__name__,
             'path': request.path,
             'trace': traceback.format_exc().splitlines()[-8:],
+        }), status
+    raise e
+
+
+@app.errorhandler(500)
+def handle_500(e):
+    if request.path.startswith('/api/') or request.path.startswith('/webhook/'):
+        db.session.rollback()
+        return jsonify({
+            'error': str(e),
+            'type': e.__class__.__name__,
+            'path': request.path,
         }), 500
-
-    return jsonify({
-        'error': 'Error interno del servidor',
-        'type': e.__class__.__name__,
-        'path': request.path,
-    }), 500
-
-
-@app.route('/favicon.ico')
-def favicon():
-    return ('', 204)
+    return e
 
 # ─── Modelos ──────────────────────────────────────────
 
@@ -127,6 +115,9 @@ class Ticket(db.Model):
     fecha_asignacion= db.Column(db.DateTime)
     fecha_llegada   = db.Column(db.DateTime)
     fecha_cierre    = db.Column(db.DateTime)
+    fecha_cancelacion = db.Column(db.DateTime)
+    motivo_cancelacion = db.Column(db.Text)
+    cancelado_por   = db.Column(db.String(80))
     raw_mensaje     = db.Column(db.Text)
     cierre          = db.relationship('Cierre', backref='ticket', uselist=False, lazy=True,
                                       cascade='all, delete-orphan')
@@ -167,6 +158,9 @@ class Ticket(db.Model):
             'fecha_asignacion': self.fecha_asignacion.isoformat() if self.fecha_asignacion else None,
             'fecha_llegada': self.fecha_llegada.isoformat() if self.fecha_llegada else None,
             'fecha_cierre': self.fecha_cierre.isoformat() if self.fecha_cierre else None,
+            'fecha_cancelacion': self.fecha_cancelacion.isoformat() if self.fecha_cancelacion else None,
+            'motivo_cancelacion': self.motivo_cancelacion,
+            'cancelado_por': self.cancelado_por,
             'mttr_minutos': self.mttr_minutos,
             'cierre': self.cierre.to_dict() if self.cierre else None,
         }
@@ -193,7 +187,6 @@ class Cierre(db.Model):
     creado          = db.Column(db.DateTime, default=now_colombia)
 
     def to_dict(self):
-        tecnico = Tecnico.query.get(self.tecnico_id) if self.tecnico_id else None
         return {
             'causa_raiz': self.causa_raiz,
             'clasificacion': self.clasificacion,
@@ -205,12 +198,7 @@ class Cierre(db.Model):
             'solucion': self.solucion,
             'estado_final': self.estado_final,
             'escalamiento': self.escalamiento,
-            'riesgo': self.riesgo,
-            'desc_riesgo': self.desc_riesgo,
             'recomendacion': self.recomendacion,
-            'tecnico_id': self.tecnico_id,
-            'tecnico_nombre': tecnico.nombre if tecnico else None,
-            'creado': self.creado.isoformat() if self.creado else None,
         }
 
 
@@ -268,12 +256,11 @@ def sync_ticket_to_sheets(ticket, action='upsert'):
     """Envía una copia del ticket a Google Sheets vía Apps Script.
 
     Es opcional: si GOOGLE_SHEETS_WEBHOOK_URL no existe, no hace nada.
-    No rompe la operación principal si Google falla.
-    Retorna (ok, mensaje) para que la sincronización manual pueda mostrar errores reales.
+    No debe romper la operación principal si Google falla.
     """
     url = os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip()
     if not url:
-        return False, 'GOOGLE_SHEETS_WEBHOOK_URL no está configurada en Render'
+        return
 
     try:
         payload = json.dumps({
@@ -288,22 +275,11 @@ def sync_ticket_to_sheets(ticket, action='upsert'):
             headers={'Content-Type': 'application/json'},
             method='POST'
         )
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            body = resp.read().decode('utf-8', errors='replace')
+        with urllib.request.urlopen(req, timeout=8) as resp:
             if resp.status >= 400:
-                msg = f"Google Sheets sync HTTP {resp.status}: {body[:300]}"
-                print(f"[WARN] {msg}")
-                return False, msg
-            return True, body[:300] or 'OK'
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode('utf-8', errors='replace') if hasattr(e, 'read') else ''
-        msg = f"HTTP {e.code}: {detail[:300]}"
-        print(f"[WARN] No se pudo sincronizar ticket con Google Sheets: {msg}")
-        return False, msg
+                print(f"[WARN] Google Sheets sync HTTP {resp.status}")
     except Exception as e:
-        msg = str(e)
-        print(f"[WARN] No se pudo sincronizar ticket con Google Sheets: {msg}")
-        return False, msg
+        print(f"[WARN] No se pudo sincronizar ticket con Google Sheets: {e}")
 
 
 def evaluar_reincidencia(ticket):
@@ -559,26 +535,10 @@ def parse_slack_preview():
 @require_login()
 def get_tickets():
     q = Ticket.query
-
     if session['rol'] == 'tecnico':
-        # Vista tecnico: evitar saturacion visual.
-        # Muestra tickets creados hoy y, como respaldo operativo,
-        # tickets anteriores que sigan activos en ruta/en sitio.
-        inicio_hoy = now_colombia().replace(hour=0, minute=0, second=0, microsecond=0)
-        fin_hoy = inicio_hoy + timedelta(days=1)
-
-        q = q.filter(Ticket.tecnico_id == session['tecnico_id']).filter(
-            db.or_(
-                db.and_(
-                    Ticket.fecha_apertura >= inicio_hoy,
-                    Ticket.fecha_apertura < fin_hoy
-                ),
-                Ticket.estado.in_(['EN_TRANSITO', 'EN_SITIO'])
-            )
-        )
+        q = q.filter(Ticket.tecnico_id == session['tecnico_id'])
     elif request.args.get('tecnico_id'):
         q = q.filter(Ticket.tecnico_id == int(request.args['tecnico_id']))
-
     if request.args.get('desde'):
         q = q.filter(Ticket.fecha_apertura >= datetime.fromisoformat(request.args['desde']))
     if request.args.get('hasta'):
@@ -586,58 +546,6 @@ def get_tickets():
     if request.args.get('estado') and request.args['estado'] != 'all':
         q = q.filter(Ticket.estado == request.args['estado'])
     return jsonify([t.to_dict() for t in q.order_by(Ticket.fecha_apertura.desc()).all()])
-
-
-@app.route('/api/sheets/sync-all', methods=['POST'])
-@require_login(['coordinador'])
-def sync_all_tickets_to_sheets():
-    """Sincroniza manualmente todos los tickets actuales con Google Sheets."""
-    if not os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip():
-        return jsonify({
-            'error': 'GOOGLE_SHEETS_WEBHOOK_URL no está configurada en Render'
-        }), 400
-
-    data = request.json or {}
-    q = Ticket.query
-
-    desde = data.get('desde')
-    hasta = data.get('hasta')
-    if desde:
-        q = q.filter(Ticket.fecha_apertura >= datetime.fromisoformat(desde))
-    if hasta:
-        q = q.filter(Ticket.fecha_apertura < datetime.fromisoformat(hasta) + timedelta(days=1))
-
-    tickets = q.order_by(Ticket.fecha_apertura.asc()).all()
-    ok_count = 0
-    failed = []
-
-    for t in tickets:
-        ok, msg = sync_ticket_to_sheets(t, 'manual_sync')
-        if ok:
-            ok_count += 1
-        else:
-            failed.append({
-                'ticket_id': t.id,
-                'slack_num': t.slack_num,
-                'error': msg
-            })
-
-    log_actividad(
-        f"Sincronización manual Google Sheets: {ok_count}/{len(tickets)} tickets",
-        'assign' if not failed else 'alert',
-        None,
-        session.get('nombre')
-    )
-    db.session.commit()
-
-    status = 200 if not failed else 207
-    return jsonify({
-        'ok': len(failed) == 0,
-        'total': len(tickets),
-        'synced': ok_count,
-        'failed': failed[:20],
-        'failed_count': len(failed)
-    }), status
 
 
 @app.route('/api/tickets', methods=['POST'])
@@ -750,30 +658,51 @@ def cambiar_estado_ticket(tid):
     data = request.json or {}
     nuevo_estado = data.get('estado')
 
-    estados_validos = ['ABIERTO', 'EN_TRANSITO', 'EN_SITIO', 'ESCALADO']
+    estados_validos = ['ABIERTO', 'EN_TRANSITO', 'EN_SITIO', 'ESCALADO', 'CANCELADO']
     if nuevo_estado not in estados_validos:
-        return jsonify({'error': 'Estado inválido. Usa ABIERTO, EN_TRANSITO, EN_SITIO o ESCALADO.'}), 400
+        return jsonify({'error': 'Estado inválido. Usa ABIERTO, EN_TRANSITO, EN_SITIO, ESCALADO o CANCELADO.'}), 400
 
     estado_anterior = t.estado
-    t.estado = nuevo_estado
 
-    if nuevo_estado == 'EN_TRANSITO' and not t.fecha_asignacion:
-        t.fecha_asignacion = now_colombia()
-    if nuevo_estado == 'EN_SITIO' and not t.fecha_llegada:
-        t.fecha_llegada = now_colombia()
-    if nuevo_estado == 'ABIERTO':
-        t.fecha_llegada = None
-        t.fecha_cierre = None
+    if nuevo_estado == 'CANCELADO':
+        motivo = (data.get('motivo_cancelacion') or data.get('motivo') or '').strip()
+        if len(motivo) < 10:
+            return jsonify({'error': 'Para cancelar debes escribir un motivo claro de mínimo 10 caracteres.'}), 400
+        t.estado = 'CANCELADO'
+        t.motivo_cancelacion = motivo
+        t.cancelado_por = session.get('nombre')
+        t.fecha_cancelacion = now_colombia()
+        if not t.fecha_cierre:
+            t.fecha_cierre = t.fecha_cancelacion
+        log_actividad(
+            f"Ticket #{t.slack_num or t.id} cancelado por coordinador — {t.site} | Motivo: {motivo}",
+            'alert',
+            t.id,
+            session.get('nombre')
+        )
+    else:
+        t.estado = nuevo_estado
 
-    log_actividad(
-        f"Coordinador cambió estado de #{t.slack_num or t.id} de {estado_anterior} a {nuevo_estado} — {t.site}",
-        'assign' if nuevo_estado in ['EN_TRANSITO', 'EN_SITIO'] else 'alert',
-        t.id,
-        session.get('nombre')
-    )
+        if nuevo_estado == 'EN_TRANSITO' and not t.fecha_asignacion:
+            t.fecha_asignacion = now_colombia()
+        if nuevo_estado == 'EN_SITIO' and not t.fecha_llegada:
+            t.fecha_llegada = now_colombia()
+        if nuevo_estado == 'ABIERTO':
+            t.fecha_llegada = None
+            t.fecha_cierre = None
+            t.fecha_cancelacion = None
+            t.motivo_cancelacion = None
+            t.cancelado_por = None
+
+        log_actividad(
+            f"Coordinador cambió estado de #{t.slack_num or t.id} de {estado_anterior} a {nuevo_estado} — {t.site}",
+            'assign' if nuevo_estado in ['EN_TRANSITO', 'EN_SITIO'] else 'alert',
+            t.id,
+            session.get('nombre')
+        )
 
     db.session.commit()
-    sync_ticket_to_sheets(t, 'status_changed')
+    sync_ticket_to_sheets(t, 'cancelled' if nuevo_estado == 'CANCELADO' else 'status_changed')
     return jsonify(t.to_dict())
 
 
@@ -884,7 +813,7 @@ def get_kpis():
     cerrados    = sum(1 for t in tickets if t.estado == 'CERRADO')
     reincid     = sum(1 for t in tickets if t.es_reincidente)
     sin_asignar = sum(1 for t in tickets if t.estado == 'ABIERTO' and not t.tecnico_id)
-    afectados   = sum(t.afectados for t in tickets if t.estado != 'CERRADO')
+    afectados   = sum(t.afectados for t in tickets if t.estado not in ['CERRADO', 'CANCELADO'])
     fcr = round(sum(1 for t in tickets if t.estado == 'CERRADO' and not t.es_reincidente) / cerrados * 100) if cerrados else 0
     mttrs = [t.mttr_minutos for t in tickets if t.mttr_minutos]
     mttr = round(sum(mttrs) / len(mttrs)) if mttrs else None
@@ -905,6 +834,7 @@ def get_kpis():
         'total': total, 'abiertos': sum(1 for t in tickets if t.estado == 'ABIERTO'),
         'sin_asignar': sin_asignar, 'en_transito': sum(1 for t in tickets if t.estado == 'EN_TRANSITO'),
         'en_sitio': sum(1 for t in tickets if t.estado == 'EN_SITIO'), 'cerrados': cerrados,
+        'cancelados': sum(1 for t in tickets if t.estado == 'CANCELADO'),
         'afectados': afectados, 'reincidentes': reincid,
         'sites_rojo': len(set(f"{t.site} {t.torre}" for t in tickets if t.semaforo == 'ROJO')),
         'fcr': fcr, 'mttr': mttr,
@@ -1114,7 +1044,7 @@ def export_excel():
         ('FCR (1ra visita)', f'{fcr}%'),
         ('MTTR promedio', f'{round(sum(mttrs)/len(mttrs))} min' if mttrs else 'N/D'),
         ('Tasa reincidencia', f'{round(reincid/total*100)}%' if total else '0%'),
-        ('Usuarios afectados', sum(t.afectados for t in tickets if t.estado != 'CERRADO')),
+        ('Usuarios afectados', sum(t.afectados for t in tickets if t.estado not in ['CERRADO', 'CANCELADO'])),
         ('Sites en ROJO', len(set(f"{t.site} {t.torre}" for t in tickets if t.semaforo == 'ROJO'))),
     ]
 
@@ -1433,6 +1363,15 @@ def ensure_schema_updates():
             )
             conn.exec_driver_sql(
                 "ALTER TABLE tecnicos ADD COLUMN IF NOT EXISTS pin_hash VARCHAR(255)"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS fecha_cancelacion TIMESTAMP"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS motivo_cancelacion TEXT"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS cancelado_por VARCHAR(80)"
             )
     except Exception as e:
         print(f"[WARN] No se pudo actualizar schema: {e}")
