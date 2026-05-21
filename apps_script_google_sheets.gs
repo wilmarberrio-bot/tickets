@@ -120,19 +120,34 @@ function findTicketRow_(sheet, ticketId) {
   return null;
 }
 
+
+function formatDateOnly_(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value;
+  return Utilities.formatDate(d, 'America/Bogota', 'dd/MM/yyyy');
+}
+
+function formatTimeOnly_(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value;
+  return Utilities.formatDate(d, 'America/Bogota', 'HH:mm:ss');
+}
+
 function buildRow_(t, action, syncedAt) {
   const cierre = t.cierre || {};
   return [
     t.id || '',
     t.slack_num || '',
     action || '',
-    syncedAt || '',
-    t.fecha_apertura || '',
-    t.fecha_asignacion || '',
-    t.fecha_llegada || '',
-    t.fecha_cierre || '',
+    formatTimeOnly_(syncedAt),
+    formatDateOnly_(t.fecha_apertura),
+    formatDateOnly_(t.fecha_asignacion),
+    formatDateOnly_(t.fecha_llegada),
+    formatDateOnly_(t.fecha_cierre),
     t.estado || '',
-    t.fecha_cancelacion || '',
+    formatDateOnly_(t.fecha_cancelacion),
     t.motivo_cancelacion || '',
     t.cancelado_por || '',
     t.site || '',
