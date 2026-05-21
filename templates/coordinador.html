@@ -635,29 +635,150 @@ async function cambiarEstadoTicket(id, estado) {
 // ══════════════════════════════════════════
 // TOPOLOGÍA
 // ══════════════════════════════════════════
-function showTopo(id) {
-  const t = TICKETS_CACHE.find(x => x.id === id);
-  if (!t) return;
+function esc(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function fmtFecha(v) {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return esc(v);
+  return d.toLocaleString('es-CO', {
+    year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'
+  });
+}
+
+function badgeEstado(estado) {
+  const e = estado || 'ABIERTO';
+  return `<span class="sb sb-${esc(e)}">${esc(e.replace('_',' '))}</span>`;
+}
+
+function renderDetalleCierre(t) {
+  const c = t.cierre;
+  const obs = t.observacion || 'Sin observación registrada.';
+  const mttr = t.mttr_minutos ? `${Math.floor(t.mttr_minutos/60)}h ${t.mttr_minutos%60}m` : '—';
+  const acciones = Array.isArray(c?.acciones) ? c.acciones.join(', ') : (c?.acciones || '—');
+  const esEscalado = (t.estado === 'ESCALADO') || (c?.estado_final === 'ESCALADO') || c?.escalamiento;
+
+  let cierreHtml = '';
+  if (c) {
+    cierreHtml = `
+      <div style="margin-top:12px;border:1px solid var(--g2);border-radius:8px;background:rgba(35,134,54,.08);padding:12px">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <strong style="color:var(--vd2);font-size:13px">✅ Seguimiento / Cierre técnico</strong>
+          <span style="font-size:11px;color:#8b949e">${fmtFecha(c.creado || t.fecha_cierre)} · MTTR ${esc(mttr)}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:12px;line-height:1.55">
+          <div><strong>Técnico:</strong> ${esc(c.tecnico_nombre || t.tecnico_nombre || '—')}</div>
+          <div><strong>Estado final:</strong> ${badgeEstado(c.estado_final || t.estado)}</div>
+          <div><strong>Causa raíz:</strong> ${esc(c.causa_raiz || '—')}</div>
+          <div><strong>Clasificación:</strong> ${esc(c.clasificacion || '—')}</div>
+          <div style="grid-column:1/-1"><strong>Acciones realizadas:</strong> ${esc(acciones)}</div>
+          <div><strong>Estado ACC:</strong> ${esc(c.estado_acc || '—')}</div>
+          <div><strong>Estado Edge:</strong> ${esc(c.estado_edge || '—')}</div>
+          <div><strong>Estado Switch:</strong> ${esc(c.estado_switch || '—')}</div>
+          <div><strong>Potencia / velocidad:</strong> ${c.potencia_dbm ?? '—'}</div>
+          <div style="grid-column:1/-1"><strong>Solución / notas de visita:</strong><br><span style="color:#c9d1d9">${esc(c.solucion || '—')}</span></div>
+          ${esEscalado ? `<div style="grid-column:1/-1;background:rgba(210,153,34,.10);border:1px solid rgba(210,153,34,.35);border-radius:6px;padding:8px"><strong style="color:var(--am2)">🔺 Falla / motivo de escalamiento:</strong><br>${esc(c.escalamiento || 'Ticket marcado como escalado')}</div>` : ''}
+          ${c.riesgo ? `<div style="grid-column:1/-1;background:rgba(248,81,73,.10);border:1px solid rgba(248,81,73,.35);border-radius:6px;padding:8px"><strong style="color:var(--rj2)">⚠ Riesgo futuro:</strong><br>${esc(c.desc_riesgo || 'Riesgo reportado sin descripción')}</div>` : ''}
+          ${c.recomendacion ? `<div style="grid-column:1/-1"><strong>Recomendación técnica:</strong><br>${esc(c.recomendacion)}</div>` : ''}
+        </div>
+      </div>`;
+  } else if (['CERRADO','ESCALADO'].includes(t.estado)) {
+    cierreHtml = `
+      <div style="margin-top:12px;border:1px solid var(--am2);border-radius:8px;background:rgba(210,153,34,.08);padding:12px;font-size:12px;color:var(--am2)">
+        ⚠️ El ticket aparece como ${esc(t.estado)}, pero no se recibió detalle de cierre en la respuesta. Actualiza la página o revisa si el cierre quedó guardado.
+      </div>`;
+  } else {
+    cierreHtml = `
+      <div style="margin-top:12px;border:1px solid var(--g2);border-radius:8px;background:var(--g1);padding:12px;font-size:12px;color:#8b949e">
+        Este ticket todavía no tiene cierre técnico. Cuando el técnico cierre o escale, aquí aparecerán la causa raíz, acciones, solución y recomendaciones.
+      </div>`;
+  }
+
+  return `
+    <div style="padding:14px;border-top:1px solid var(--g2)">
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+        <div style="border:1px solid var(--g2);border-radius:8px;background:var(--g1);padding:12px">
+          <strong style="color:var(--az2);font-size:13px">📌 Información inicial</strong>
+          <div style="font-size:12px;line-height:1.65;margin-top:8px">
+            <strong>Ticket:</strong> #${esc(t.slack_num || t.id)}<br>
+            <strong>Fecha apertura:</strong> ${fmtFecha(t.fecha_apertura)}<br>
+            <strong>Site:</strong> ${esc(t.site || '—')}<br>
+            <strong>Torre:</strong> ${esc(t.torre || '—')}<br>
+            <strong>Zona:</strong> ${esc(t.zona || '—')}<br>
+            <strong>Tipo de falla:</strong> ${esc(t.tipo || '—')}<br>
+            <strong>Afectados:</strong> ${esc(t.afectados ?? 0)}<br>
+            <strong>Estado:</strong> ${badgeEstado(t.estado)}
+          </div>
+        </div>
+        <div style="border:1px solid var(--g2);border-radius:8px;background:var(--g1);padding:12px">
+          <strong style="color:var(--az2);font-size:13px">🧭 Equipo / red</strong>
+          <div style="font-size:12px;line-height:1.65;margin-top:8px">
+            <strong>ACC:</strong> ${esc(t.acc_nombre || '—')}<br>
+            <strong>IP ACC:</strong> ${esc(t.acc_ip || '—')}<br>
+            <strong>Edge:</strong> ${esc(t.edge_nombre || '—')}<br>
+            <strong>IP Edge:</strong> ${esc(t.edge_ip || '—')}<br>
+            <strong>Modelo:</strong> ${esc(t.modelo || '—')}<br>
+            <strong>Técnico asignado:</strong> ${esc(t.tecnico_nombre || '—')}
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;border:1px solid var(--g2);border-radius:8px;background:var(--g1);padding:12px">
+        <strong style="color:var(--az2);font-size:13px">📝 Observación inicial / reporte</strong>
+        <div style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;line-height:1.6;margin-top:8px">${esc(obs)}</div>
+      </div>
+
+      ${cierreHtml}
+    </div>`;
+}
+
+async function showTopo(id) {
+  let t = TICKETS_CACHE.find(x => x.id === id);
+  try {
+    // Trae el ticket fresco para ver cierre, causa raíz y notas aunque la tabla esté desactualizada.
+    t = await api(`/api/tickets/${id}`);
+    const idx = TICKETS_CACHE.findIndex(x => x.id === id);
+    if (idx >= 0) TICKETS_CACHE[idx] = t;
+  } catch(e) {
+    if (!t) { toast('Error cargando detalle: ' + e.message, 'err'); return; }
+    toast('Mostrando datos en caché. Error al actualizar detalle: ' + e.message, 'warn');
+  }
+
   const ok = t.estado === 'CERRADO';
   document.getElementById('topo-tit').textContent = `#${t.slack_num||t.id} — ${t.site} ${t.torre||''} ${t.zona ? '— ' + t.zona : ''}`;
   document.getElementById('topo-cont').innerHTML = `
     <span class="topo-n" style="border-color:var(--vd2);color:var(--vd2)">🌐 Internet</span>
     <span class="topo-arr">→</span>
-    <span class="topo-n" style="border-color:var(--az2);color:var(--az2)">EDGE<br><small>${t.edge_ip||'—'}</small></span>
+    <span class="topo-n" style="border-color:var(--az2);color:var(--az2)">EDGE<br><small>${esc(t.edge_ip||'—')}</small></span>
     <span class="topo-arr">→</span>
-    <span class="topo-n" style="border-color:var(--am2);color:var(--am2)">ACC<br><small>${t.acc_nombre||'—'}<br>${t.acc_ip||''}</small></span>
+    <span class="topo-n" style="border-color:var(--am2);color:var(--am2)">ACC<br><small>${esc(t.acc_nombre||'—')}<br>${esc(t.acc_ip||'')}</small></span>
     <span class="topo-arr">→</span>
     <span class="topo-n" style="border-color:${ok?'var(--vd2)':'var(--rj2)'};color:${ok?'var(--vd2)':'var(--rj2)'}">
-      ${ok?'✅':'🔴'} SW ${t.modelo||''}<br><small>${ok?'Operativo':'Caído'}</small></span>
+      ${ok?'✅':'🔴'} SW ${esc(t.modelo||'')}<br><small>${ok?'Operativo':'Caído / validar'}</small></span>
     <span class="topo-arr">→</span>
-    <span style="font-size:11px;color:#8b949e">${t.afectados} usuarios</span>`;
+    <span style="font-size:11px;color:#8b949e">${esc(t.afectados)} usuarios</span>`;
 
   const macs = t.macs || [];
-  document.getElementById('topo-macs').innerHTML = macs.length
-  ? '<strong style="color:#8b949e">Usuarios / MACs afectados:</strong> ' + macs.map(m =>
-      m.apt ? `${m.mac} APT ${m.apt}` : `${m.mac}`
-    ).join(' | ')
-  : '';
+  const links = [];
+  if (t.topologia_url) links.push(`<a href="${esc(t.topologia_url)}" target="_blank" class="btn btn-g btn-sm">🔗 Topología</a>`);
+  if (t.ubicacion_url) links.push(`<a href="${esc(t.ubicacion_url)}" target="_blank" class="btn btn-g btn-sm">📍 Ubicación</a>`);
+
+  document.getElementById('topo-macs').innerHTML = `
+    ${macs.length
+      ? '<strong style="color:#8b949e">Usuarios / MACs afectados:</strong> ' + macs.map(m =>
+          m.apt ? `${esc(m.mac)} APT ${esc(m.apt)}` : `${esc(m.mac)}`
+        ).join(' | ')
+      : '<span style="color:#8b949e">Sin usuarios/MACs registrados.</span>'}
+    ${links.length ? `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">${links.join('')}</div>` : ''}
+    ${renderDetalleCierre(t)}
+  `;
 
   document.getElementById('topo-panel').style.display = 'block';
   document.getElementById('topo-panel').scrollIntoView({ behavior: 'smooth' });
