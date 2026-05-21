@@ -115,9 +115,6 @@ class Ticket(db.Model):
     fecha_asignacion= db.Column(db.DateTime)
     fecha_llegada   = db.Column(db.DateTime)
     fecha_cierre    = db.Column(db.DateTime)
-    fecha_cancelacion = db.Column(db.DateTime)
-    motivo_cancelacion = db.Column(db.Text)
-    cancelado_por   = db.Column(db.String(80))
     raw_mensaje     = db.Column(db.Text)
     cierre          = db.relationship('Cierre', backref='ticket', uselist=False, lazy=True,
                                       cascade='all, delete-orphan')
@@ -158,9 +155,6 @@ class Ticket(db.Model):
             'fecha_asignacion': self.fecha_asignacion.isoformat() if self.fecha_asignacion else None,
             'fecha_llegada': self.fecha_llegada.isoformat() if self.fecha_llegada else None,
             'fecha_cierre': self.fecha_cierre.isoformat() if self.fecha_cierre else None,
-            'fecha_cancelacion': self.fecha_cancelacion.isoformat() if self.fecha_cancelacion else None,
-            'motivo_cancelacion': self.motivo_cancelacion,
-            'cancelado_por': self.cancelado_por,
             'mttr_minutos': self.mttr_minutos,
             'cierre': self.cierre.to_dict() if self.cierre else None,
         }
@@ -602,11 +596,42 @@ def get_ticket(tid):
 @require_login(['coordinador'])
 def asignar_ticket(tid):
     t = Ticket.query.get_or_404(tid)
-    tec = Tecnico.query.get_or_404((request.json or {}).get('tecnico_id'))
-    t.tecnico_id = tec.id; t.estado = 'EN_TRANSITO'; t.fecha_asignacion = now_colombia()
-    log_actividad(f"{tec.nombre} asignado a #{t.slack_num or t.id} — {t.site}", 'assign', t.id, session.get('nombre'))
+    data = request.json or {}
+    tec = Tecnico.query.get_or_404(data.get('tecnico_id'))
+
+    if t.estado in ['CERRADO', 'ESCALADO', 'CANCELADO']:
+        return jsonify({'error': f'No se puede asignar/reasignar un ticket en estado {t.estado}'}), 400
+
+    anterior = t.tecnico_rel.nombre if t.tecnico_rel else 'Sin asignar'
+    mismo_tecnico = t.tecnico_id == tec.id
+    estaba_en_sitio = t.estado == 'EN_SITIO'
+
+    t.tecnico_id = tec.id
+    t.estado = 'EN_TRANSITO'
+    t.fecha_asignacion = now_colombia()
+
+    # Si cambia de técnico y ya estaba en sitio, reiniciamos llegada para que
+    # el nuevo técnico marque su llegada real. No se borra la auditoría.
+    if not mismo_tecnico and estaba_en_sitio:
+        t.fecha_llegada = None
+
+    if anterior == 'Sin asignar':
+        msg = f"{tec.nombre} asignado a #{t.slack_num or t.id} — {t.site}"
+        action = 'assigned'
+    elif mismo_tecnico:
+        msg = f"Asignación confirmada para {tec.nombre} en #{t.slack_num or t.id} — {t.site}"
+        action = 'assignment_confirmed'
+    else:
+        msg = f"Ticket #{t.slack_num or t.id} reasignado de {anterior} a {tec.nombre} — {t.site}"
+        action = 'reassigned'
+
+    nota = (data.get('nota') or '').strip()
+    if nota:
+        msg = f"{msg} | Nota: {nota[:120]}"
+
+    log_actividad(msg, 'assign', t.id, session.get('nombre'))
     db.session.commit()
-    sync_ticket_to_sheets(t, 'assigned')
+    sync_ticket_to_sheets(t, action)
     return jsonify(t.to_dict())
 
 
@@ -658,51 +683,30 @@ def cambiar_estado_ticket(tid):
     data = request.json or {}
     nuevo_estado = data.get('estado')
 
-    estados_validos = ['ABIERTO', 'EN_TRANSITO', 'EN_SITIO', 'ESCALADO', 'CANCELADO']
+    estados_validos = ['ABIERTO', 'EN_TRANSITO', 'EN_SITIO', 'ESCALADO']
     if nuevo_estado not in estados_validos:
-        return jsonify({'error': 'Estado inválido. Usa ABIERTO, EN_TRANSITO, EN_SITIO, ESCALADO o CANCELADO.'}), 400
+        return jsonify({'error': 'Estado inválido. Usa ABIERTO, EN_TRANSITO, EN_SITIO o ESCALADO.'}), 400
 
     estado_anterior = t.estado
+    t.estado = nuevo_estado
 
-    if nuevo_estado == 'CANCELADO':
-        motivo = (data.get('motivo_cancelacion') or data.get('motivo') or '').strip()
-        if len(motivo) < 10:
-            return jsonify({'error': 'Para cancelar debes escribir un motivo claro de mínimo 10 caracteres.'}), 400
-        t.estado = 'CANCELADO'
-        t.motivo_cancelacion = motivo
-        t.cancelado_por = session.get('nombre')
-        t.fecha_cancelacion = now_colombia()
-        if not t.fecha_cierre:
-            t.fecha_cierre = t.fecha_cancelacion
-        log_actividad(
-            f"Ticket #{t.slack_num or t.id} cancelado por coordinador — {t.site} | Motivo: {motivo}",
-            'alert',
-            t.id,
-            session.get('nombre')
-        )
-    else:
-        t.estado = nuevo_estado
+    if nuevo_estado == 'EN_TRANSITO' and not t.fecha_asignacion:
+        t.fecha_asignacion = now_colombia()
+    if nuevo_estado == 'EN_SITIO' and not t.fecha_llegada:
+        t.fecha_llegada = now_colombia()
+    if nuevo_estado == 'ABIERTO':
+        t.fecha_llegada = None
+        t.fecha_cierre = None
 
-        if nuevo_estado == 'EN_TRANSITO' and not t.fecha_asignacion:
-            t.fecha_asignacion = now_colombia()
-        if nuevo_estado == 'EN_SITIO' and not t.fecha_llegada:
-            t.fecha_llegada = now_colombia()
-        if nuevo_estado == 'ABIERTO':
-            t.fecha_llegada = None
-            t.fecha_cierre = None
-            t.fecha_cancelacion = None
-            t.motivo_cancelacion = None
-            t.cancelado_por = None
-
-        log_actividad(
-            f"Coordinador cambió estado de #{t.slack_num or t.id} de {estado_anterior} a {nuevo_estado} — {t.site}",
-            'assign' if nuevo_estado in ['EN_TRANSITO', 'EN_SITIO'] else 'alert',
-            t.id,
-            session.get('nombre')
-        )
+    log_actividad(
+        f"Coordinador cambió estado de #{t.slack_num or t.id} de {estado_anterior} a {nuevo_estado} — {t.site}",
+        'assign' if nuevo_estado in ['EN_TRANSITO', 'EN_SITIO'] else 'alert',
+        t.id,
+        session.get('nombre')
+    )
 
     db.session.commit()
-    sync_ticket_to_sheets(t, 'cancelled' if nuevo_estado == 'CANCELADO' else 'status_changed')
+    sync_ticket_to_sheets(t, 'status_changed')
     return jsonify(t.to_dict())
 
 
@@ -813,7 +817,7 @@ def get_kpis():
     cerrados    = sum(1 for t in tickets if t.estado == 'CERRADO')
     reincid     = sum(1 for t in tickets if t.es_reincidente)
     sin_asignar = sum(1 for t in tickets if t.estado == 'ABIERTO' and not t.tecnico_id)
-    afectados   = sum(t.afectados for t in tickets if t.estado not in ['CERRADO', 'CANCELADO'])
+    afectados   = sum(t.afectados for t in tickets if t.estado != 'CERRADO')
     fcr = round(sum(1 for t in tickets if t.estado == 'CERRADO' and not t.es_reincidente) / cerrados * 100) if cerrados else 0
     mttrs = [t.mttr_minutos for t in tickets if t.mttr_minutos]
     mttr = round(sum(mttrs) / len(mttrs)) if mttrs else None
@@ -834,7 +838,6 @@ def get_kpis():
         'total': total, 'abiertos': sum(1 for t in tickets if t.estado == 'ABIERTO'),
         'sin_asignar': sin_asignar, 'en_transito': sum(1 for t in tickets if t.estado == 'EN_TRANSITO'),
         'en_sitio': sum(1 for t in tickets if t.estado == 'EN_SITIO'), 'cerrados': cerrados,
-        'cancelados': sum(1 for t in tickets if t.estado == 'CANCELADO'),
         'afectados': afectados, 'reincidentes': reincid,
         'sites_rojo': len(set(f"{t.site} {t.torre}" for t in tickets if t.semaforo == 'ROJO')),
         'fcr': fcr, 'mttr': mttr,
@@ -1044,7 +1047,7 @@ def export_excel():
         ('FCR (1ra visita)', f'{fcr}%'),
         ('MTTR promedio', f'{round(sum(mttrs)/len(mttrs))} min' if mttrs else 'N/D'),
         ('Tasa reincidencia', f'{round(reincid/total*100)}%' if total else '0%'),
-        ('Usuarios afectados', sum(t.afectados for t in tickets if t.estado not in ['CERRADO', 'CANCELADO'])),
+        ('Usuarios afectados', sum(t.afectados for t in tickets if t.estado != 'CERRADO')),
         ('Sites en ROJO', len(set(f"{t.site} {t.torre}" for t in tickets if t.semaforo == 'ROJO'))),
     ]
 
@@ -1363,15 +1366,6 @@ def ensure_schema_updates():
             )
             conn.exec_driver_sql(
                 "ALTER TABLE tecnicos ADD COLUMN IF NOT EXISTS pin_hash VARCHAR(255)"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS fecha_cancelacion TIMESTAMP"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS motivo_cancelacion TEXT"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS cancelado_por VARCHAR(80)"
             )
     except Exception as e:
         print(f"[WARN] No se pudo actualizar schema: {e}")
