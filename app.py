@@ -559,10 +559,26 @@ def parse_slack_preview():
 @require_login()
 def get_tickets():
     q = Ticket.query
+
     if session['rol'] == 'tecnico':
-        q = q.filter(Ticket.tecnico_id == session['tecnico_id'])
+        # Vista tecnico: evitar saturacion visual.
+        # Muestra tickets creados hoy y, como respaldo operativo,
+        # tickets anteriores que sigan activos en ruta/en sitio.
+        inicio_hoy = now_colombia().replace(hour=0, minute=0, second=0, microsecond=0)
+        fin_hoy = inicio_hoy + timedelta(days=1)
+
+        q = q.filter(Ticket.tecnico_id == session['tecnico_id']).filter(
+            db.or_(
+                db.and_(
+                    Ticket.fecha_apertura >= inicio_hoy,
+                    Ticket.fecha_apertura < fin_hoy
+                ),
+                Ticket.estado.in_(['EN_TRANSITO', 'EN_SITIO'])
+            )
+        )
     elif request.args.get('tecnico_id'):
         q = q.filter(Ticket.tecnico_id == int(request.args['tecnico_id']))
+
     if request.args.get('desde'):
         q = q.filter(Ticket.fecha_apertura >= datetime.fromisoformat(request.args['desde']))
     if request.args.get('hasta'):
