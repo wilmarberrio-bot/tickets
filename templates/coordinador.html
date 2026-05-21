@@ -90,6 +90,7 @@
     <button class="qbtn"    onclick="setEst(this,'EN_SITIO')">🔵 En Sitio</button>
     <button class="qbtn"    onclick="setEst(this,'CERRADO')">🟢 Cerrados</button>
     <button class="qbtn"    onclick="setEst(this,'ESCALADO')">🟣 Escalados</button>
+    <button class="qbtn"    onclick="setEst(this,'CANCELADO')">⚫ Cancelados</button>
     <span id="tk-badge" style="margin-left:auto;font-size:11px;color:#8b949e">0 tickets</span>
   </div>
   <div class="panel">
@@ -110,7 +111,6 @@
       <button class="btn btn-g btn-sm" onclick="document.getElementById('topo-panel').style.display='none'">✕</button></div>
     <div class="topo" id="topo-cont"></div>
     <div id="topo-macs" style="padding:0 14px 12px;font-size:11px;color:#8b949e"></div>
-    <div id="topo-detail" style="padding:0 14px 14px;font-size:12px;color:#8b949e"></div>
   </div>
 </div>
 
@@ -523,6 +523,7 @@ function renderTickets(all) {
         <option value="EN_TRANSITO" ${t.estado==='EN_TRANSITO'?'disabled':''}>En tránsito</option>
         <option value="EN_SITIO" ${t.estado==='EN_SITIO'?'disabled':''}>En sitio</option>
         <option value="ESCALADO" ${t.estado==='ESCALADO'?'disabled':''}>Escalado</option>
+        <option value="CANCELADO" ${t.estado==='CANCELADO'?'disabled':''}>Cancelado</option>
       </select>`;
 
     return `<tr>
@@ -533,7 +534,7 @@ function renderTickets(all) {
       <td>${t.tipo||'—'}</td>
       <td style="font-weight:700;color:${t.afectados>=5?'var(--rj2)':'var(--am2)'}">${t.afectados}</td>
       <td>${t.tecnico_nombre ? `<span style="color:var(--az2)">${t.tecnico_nombre}</span>` : '<span style="color:var(--rj2);font-weight:700">⚠ Sin asignar</span>'}</td>
-      <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span></td>
+      <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span>${t.estado==='CANCELADO' && t.motivo_cancelacion ? `<br><span style="font-size:10px;color:#8b949e" title="${escapeHtml(t.motivo_cancelacion)}">${escapeHtml(t.motivo_cancelacion).slice(0,32)}${t.motivo_cancelacion.length>32?'...':''}</span>` : ''}</td>
       <td>${tStr}</td>
       <td><span class="sem ${semC}"></span> <span style="font-size:10px;color:#8b949e">ev.${t.evento_num}</span></td>
       <td style="white-space:nowrap">${acciones}<br>${estadoSelect}</td>
@@ -591,7 +592,27 @@ async function cambiarEstadoTicket(id, estado) {
   if (!estado) return;
 
   const label = estado.replace('_', ' ').toLowerCase();
-  if (!confirm(`¿Cambiar este ticket a ${label}?`)) {
+  let body = { estado };
+
+  if (estado === 'CANCELADO') {
+    const motivo = prompt('Motivo de cancelación. Ej: Cliente canceló visita, falso positivo, se resolvió remoto, ticket duplicado, no requiere desplazamiento.');
+    if (motivo === null) {
+      loadTickets();
+      return;
+    }
+    if (!motivo.trim() || motivo.trim().length < 10) {
+      toast('Debes escribir un motivo de cancelación de mínimo 10 caracteres', 'err');
+      loadTickets();
+      return;
+    }
+    body.motivo_cancelacion = motivo.trim();
+    if (!confirm(`¿Cancelar este ticket?
+
+Motivo: ${motivo.trim()}`)) {
+      loadTickets();
+      return;
+    }
+  } else if (!confirm(`¿Cambiar este ticket a ${label}?`)) {
     loadTickets();
     return;
   }
@@ -599,9 +620,9 @@ async function cambiarEstadoTicket(id, estado) {
   try {
     await api(`/api/tickets/${id}/estado`, {
       method: 'PUT',
-      body: { estado }
+      body
     });
-    toast(`✅ Estado actualizado a ${label}`, 'ok');
+    toast(estado === 'CANCELADO' ? '✅ Ticket cancelado con trazabilidad' : `✅ Estado actualizado a ${label}`, 'ok');
     loadTickets();
     loadDashboard();
   } catch(e) {
@@ -613,20 +634,6 @@ async function cambiarEstadoTicket(id, estado) {
 // ══════════════════════════════════════════
 // TOPOLOGÍA
 // ══════════════════════════════════════════
-function esc(v) {
-  return String(v ?? '').replace(/[&<>"']/g, ch => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[ch]));
-}
-
-function fmtFecha(v) {
-  if (!v) return '—';
-  try {
-    const d = new Date(v);
-    return d.toLocaleDateString('es-CO') + ' ' + d.toLocaleTimeString('es-CO', { hour:'2-digit', minute:'2-digit' });
-  } catch (_) { return v; }
-}
-
 function showTopo(id) {
   const t = TICKETS_CACHE.find(x => x.id === id);
   if (!t) return;
@@ -635,69 +642,21 @@ function showTopo(id) {
   document.getElementById('topo-cont').innerHTML = `
     <span class="topo-n" style="border-color:var(--vd2);color:var(--vd2)">🌐 Internet</span>
     <span class="topo-arr">→</span>
-    <span class="topo-n" style="border-color:var(--az2);color:var(--az2)">EDGE<br><small>${esc(t.edge_ip||'—')}</small></span>
+    <span class="topo-n" style="border-color:var(--az2);color:var(--az2)">EDGE<br><small>${t.edge_ip||'—'}</small></span>
     <span class="topo-arr">→</span>
-    <span class="topo-n" style="border-color:var(--am2);color:var(--am2)">ACC<br><small>${esc(t.acc_nombre||'—')}<br>${esc(t.acc_ip||'')}</small></span>
+    <span class="topo-n" style="border-color:var(--am2);color:var(--am2)">ACC<br><small>${t.acc_nombre||'—'}<br>${t.acc_ip||''}</small></span>
     <span class="topo-arr">→</span>
     <span class="topo-n" style="border-color:${ok?'var(--vd2)':'var(--rj2)'};color:${ok?'var(--vd2)':'var(--rj2)'}">
-      ${ok?'✅':'🔴'} SW ${esc(t.modelo||'')}<br><small>${ok?'Operativo':'Caído'}</small></span>
+      ${ok?'✅':'🔴'} SW ${t.modelo||''}<br><small>${ok?'Operativo':'Caído'}</small></span>
     <span class="topo-arr">→</span>
-    <span style="font-size:11px;color:#8b949e">${esc(t.afectados)} usuarios</span>`;
+    <span style="font-size:11px;color:#8b949e">${t.afectados} usuarios</span>`;
 
   const macs = t.macs || [];
   document.getElementById('topo-macs').innerHTML = macs.length
   ? '<strong style="color:#8b949e">Usuarios / MACs afectados:</strong> ' + macs.map(m =>
-      m.apt ? `${esc(m.mac)} APT ${esc(m.apt)}` : `${esc(m.mac)}`
+      m.apt ? `${m.mac} APT ${m.apt}` : `${m.mac}`
     ).join(' | ')
   : '';
-
-  const c = t.cierre || null;
-  const acciones = c && Array.isArray(c.acciones) ? c.acciones.join(', ') : (c?.acciones || '—');
-  const estadoFinal = c?.estado_final || t.estado || '—';
-  const escalamiento = c?.escalamiento || (t.estado === 'ESCALADO' ? 'Escalado sin detalle registrado' : 'No aplica');
-  const mttr = t.mttr_minutos ? `${Math.floor(t.mttr_minutos/60)}h ${t.mttr_minutos%60}m` : '—';
-
-  document.getElementById('topo-detail').innerHTML = `
-    <div style="margin-top:10px;border-top:1px solid var(--g2);padding-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
-      <div style="background:var(--g1);border:1px solid var(--g2);border-radius:8px;padding:10px">
-        <div style="font-size:11px;color:var(--az2);font-weight:700;margin-bottom:8px;text-transform:uppercase">📋 Observación inicial</div>
-        <div style="white-space:pre-wrap;color:#e6edf3;line-height:1.5">${esc(t.observacion || 'Sin observación registrada.')}</div>
-        <div style="margin-top:8px;font-size:11px;color:#8b949e">
-          <strong>Tipo falla inicial:</strong> ${esc(t.tipo || '—')}<br>
-          <strong>Semáforo:</strong> ${esc(t.semaforo || '—')} | <strong>Evento #:</strong> ${esc(t.evento_num || '—')}
-          ${t.motivo_reincidencia ? `<br><strong>Motivo reincidencia:</strong> ${esc(t.motivo_reincidencia)}` : ''}
-        </div>
-      </div>
-
-      <div style="background:var(--g1);border:1px solid var(--g2);border-radius:8px;padding:10px">
-        <div style="font-size:11px;color:${c?'var(--vd2)':'var(--am2)'};font-weight:700;margin-bottom:8px;text-transform:uppercase">🛠 Seguimiento / cierre técnico</div>
-        ${c ? `
-          <div style="display:grid;grid-template-columns:140px 1fr;gap:5px 10px;line-height:1.5">
-            <strong>Técnico cierre:</strong><span>${esc(c.tecnico_nombre || t.tecnico_nombre || '—')}</span>
-            <strong>Fecha cierre:</strong><span>${esc(fmtFecha(t.fecha_cierre || c.creado))}</span>
-            <strong>Estado final:</strong><span>${esc(estadoFinal)}</span>
-            <strong>MTTR:</strong><span>${esc(mttr)}</span>
-            <strong>Causa raíz:</strong><span style="color:#e6edf3">${esc(c.causa_raiz || '—')}</span>
-            <strong>Clasificación:</strong><span>${esc(c.clasificacion || '—')}</span>
-            <strong>Acciones:</strong><span>${esc(acciones)}</span>
-            <strong>Falla escalada:</strong><span style="color:${estadoFinal==='ESCALADO'?'var(--am2)':'#8b949e'}">${esc(escalamiento)}</span>
-            <strong>Estado ACC:</strong><span>${esc(c.estado_acc || '—')}</span>
-            <strong>Estado Edge:</strong><span>${esc(c.estado_edge || '—')}</span>
-            <strong>Estado Switch:</strong><span>${esc(c.estado_switch || '—')}</span>
-            <strong>Potencia / velocidad:</strong><span>${esc(c.potencia_dbm ?? '—')}</span>
-          </div>
-          <div style="margin-top:10px">
-            <strong style="color:#e6edf3">Solución / notas de visita:</strong>
-            <div style="margin-top:4px;white-space:pre-wrap;color:#e6edf3;line-height:1.5">${esc(c.solucion || '—')}</div>
-          </div>
-          ${c.riesgo ? `<div style="margin-top:8px;color:var(--rj2)"><strong>⚠ Riesgo futuro:</strong> ${esc(c.desc_riesgo || 'Sin descripción')}</div>` : ''}
-          ${c.recomendacion ? `<div style="margin-top:8px;color:var(--az2)"><strong>Recomendación:</strong> ${esc(c.recomendacion)}</div>` : ''}
-        ` : `
-          <div style="color:var(--am2);line-height:1.5">Este ticket todavía no tiene cierre técnico registrado.</div>
-          <div style="margin-top:8px;font-size:11px"><strong>Estado actual:</strong> ${esc(t.estado || '—')} | <strong>Técnico:</strong> ${esc(t.tecnico_nombre || '—')}</div>
-        `}
-      </div>
-    </div>`;
 
   document.getElementById('topo-panel').style.display = 'block';
   document.getElementById('topo-panel').scrollIntoView({ behavior: 'smooth' });
@@ -1014,6 +973,15 @@ function closeModal(id) {
   if (id === 'm-asignar') curTicketId = null;
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 function toast(msg, type='ok') {
   const el = document.getElementById('toast');
   el.textContent = msg; el.className = `toast ${type} show`;
@@ -1109,6 +1077,7 @@ init();
 /* ── Tendencia chart ── */
 .chart-wrap{padding:14px;overflow-x:auto}
 
+.sb-CANCELADO{color:#8b949e;border-color:#8b949e;background:#161b22}
 .estado-mini{margin-top:5px;background:var(--g1);border:1px solid var(--g2);border-radius:5px;color:#e6edf3;font-size:10px;padding:4px 6px;max-width:115px}
 .estado-mini:focus{outline:none;border-color:var(--az2)}
 </style>
@@ -1218,7 +1187,6 @@ function injectExportBar() {
     <button class="btn-export btn-csv" onclick="exportarCSV()">📄 CSV</button>
     <button class="btn-export btn-excel" onclick="exportarExcel()">📊 Excel</button>
     <button class="btn-export btn-pdf" onclick="exportarPDF()">🖨 PDF / Imprimir</button>
-    <button class="btn-export btn-excel" onclick="sincronizarGoogleSheets()">🔄 Sincronizar Google Sheets</button>
   `;
   ticketsTab.insertBefore(bar, ticketsTab.firstChild);
 }
@@ -1246,27 +1214,6 @@ function exportarPDF() {
   const params = buildQueryParams();
   window.open('/api/export/pdf-report?' + params, '_blank');
   showToast('🖨 Abriendo reporte para impresión...', 'ok');
-}
-
-async function sincronizarGoogleSheets() {
-  if (!confirm('¿Sincronizar todos los tickets actuales con Google Sheets? Esto actualizará filas existentes y agregará las que falten.')) return;
-
-  try {
-    showToast('🔄 Sincronizando tickets con Google Sheets...', 'warn');
-    const res = await api('/api/sheets/sync-all', {
-      method: 'POST',
-      body: {}
-    });
-
-    if (res.failed_count && res.failed_count > 0) {
-      const firstError = res.failed?.[0]?.error || 'Revisa logs de Render';
-      showToast(`⚠️ Sincronizados ${res.synced}/${res.total}. Error: ${firstError}`, 'warn');
-    } else {
-      showToast(`✅ Google Sheets actualizado: ${res.synced}/${res.total} tickets`, 'ok');
-    }
-  } catch(e) {
-    showToast('Error real al sincronizar: ' + e.message, 'err');
-  }
 }
 
 // ── Eliminar ticket ───────────────────────────────────
