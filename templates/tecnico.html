@@ -131,7 +131,6 @@
       <strong style="color:#e6edf3">Observación:</strong><br>
       <span id="det-obs-txt"></span>
     </div>
-    <div id="det-historial" style="padding:0 14px 14px;font-size:12px;color:#8b949e;display:none"></div>
   </div>
 </div>
 
@@ -449,7 +448,35 @@ function irACierre(id) {
   loadTicketCierre();
 }
 
-async function verDetalle(id) {
+
+function escHtml(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function renderHistorialOperativoAnonimo(t) {
+  const hist = t.historial_operativo || [];
+  if (!hist.length) return '';
+  return `<div style="margin-top:12px;border:1px solid var(--g2);border-radius:8px;background:rgba(88,166,255,.06);padding:12px;font-size:12px;line-height:1.55">
+    <strong style="color:var(--az2)">📚 Historial operativo relacionado</strong>
+    <div style="color:#8b949e;font-size:11px;margin-top:4px">No se muestran nombres de técnicos anteriores.</div>
+    ${hist.map(h => `<div style="border-top:1px solid var(--g2);margin-top:8px;padding-top:8px">
+      <strong>#${escHtml(h.ticket || '')}</strong> · ${h.fecha ? new Date(h.fecha).toLocaleDateString('es-CO') : '—'} · ${escHtml(h.tipo || '—')}<br>
+      <strong>Motivo:</strong> ${escHtml(h.motivo || '—')}<br>
+      ${h.causa_raiz ? `<strong>Causa raíz:</strong> ${escHtml(h.causa_raiz)}<br>` : ''}
+      ${Array.isArray(h.acciones) && h.acciones.length ? `<strong>Acciones:</strong> ${escHtml(h.acciones.join(', '))}<br>` : ''}
+      ${h.solucion ? `<strong>Solución / hallazgo:</strong> ${escHtml(h.solucion)}<br>` : ''}
+      ${h.escalamiento ? `<strong>Escalamiento:</strong> ${escHtml(h.escalamiento)}<br>` : ''}
+      ${h.recomendacion ? `<strong>Recomendación:</strong> ${escHtml(h.recomendacion)}<br>` : ''}
+    </div>`).join('')}
+  </div>`;
+}
+
+function verDetalle(id) {
   const t = MIS_TICKETS.find(x => x.id === id);
   if (!t) return;
   document.getElementById('det-titulo').textContent = `#${t.slack_num||t.id} — ${t.site} ${t.torre||''}`;
@@ -462,7 +489,7 @@ async function verDetalle(id) {
     <strong>Modelo:</strong> ${t.modelo||'—'}<br>
     <strong>Estado:</strong> <span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span><br>
     ${t.appointment_num ? `<strong>Appointment:</strong> #${t.appointment_num}<br>` : ''}
-    ${t.es_reincidente ? '<strong style="color:var(--rj2)">⚠ Reincidente / revisar historial</strong><br>' : ''}
+    ${t.es_reincidente ? '<strong style="color:var(--rj2)">⚠ Reincidente</strong><br>' : ''}
     ${t.motivo_reincidencia ? `<strong>Motivo reinc.:</strong> ${t.motivo_reincidencia}<br>` : ''}
   `;
   const ok = t.estado === 'CERRADO';
@@ -486,40 +513,11 @@ async function verDetalle(id) {
   document.getElementById('det-links').innerHTML = links.join('');
 
   const obsEl = document.getElementById('det-obs');
-  if (t.observacion) {
+  const histHtml = renderHistorialOperativoAnonimo(t);
+  if (t.observacion || histHtml) {
     obsEl.style.display = 'block';
-    document.getElementById('det-obs-txt').textContent = t.observacion;
+    document.getElementById('det-obs-txt').innerHTML = `${t.observacion ? escHtml(t.observacion).replace(/\n/g, '<br>') : ''}${histHtml}`;
   } else { obsEl.style.display = 'none'; }
-
-  const histEl = document.getElementById('det-historial');
-  histEl.style.display = 'none';
-  histEl.innerHTML = '';
-  if (t.es_reincidente) {
-    try {
-      const h = await api(`/api/tickets/${id}/historial-contexto`);
-      if (h.historial && h.historial.length) {
-        histEl.style.display = 'block';
-        histEl.innerHTML = `<div style="border:1px solid var(--am);border-radius:8px;padding:10px;background:#2d2200;color:#d29922;margin-top:8px">
-          <strong>🔁 Historial operativo similar</strong><br>
-          <span style="font-size:11px;color:#c9a23f">Se ocultan nombres de técnicos anteriores. Usa esto como contexto para no repetir pruebas.</span>
-          <div style="margin-top:8px;display:grid;gap:8px">
-            ${h.historial.map(x => `<div style="background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#c9d1d9">
-              <strong>#${x.ticket}</strong> · ${x.fecha ? new Date(x.fecha).toLocaleDateString('es-CO') : '—'} · ${x.estado}<br>
-              <span style="font-size:11px;color:#8b949e">Coincide por: ${(x.razones||[]).join(', ') || 'patrón similar'}</span><br>
-              ${x.causa_raiz ? `<strong>Causa:</strong> ${x.causa_raiz}<br>` : ''}
-              ${x.acciones?.length ? `<strong>Acciones:</strong> ${x.acciones.join(', ')}<br>` : ''}
-              ${x.solucion ? `<strong>Solución / hallazgo:</strong> ${x.solucion}<br>` : ''}
-              ${x.escalamiento ? `<strong>Escalamiento:</strong> ${x.escalamiento}<br>` : ''}
-              ${x.recomendacion ? `<strong>Recomendación:</strong> ${x.recomendacion}` : ''}
-            </div>`).join('')}
-          </div>
-        </div>`;
-      }
-    } catch(e) {
-      histEl.style.display = 'block';
-      histEl.innerHTML = `<span style="color:var(--rj2)">No se pudo cargar historial: ${e.message}</span>`;
-    }
-  }
 
   document.getElementById('detalle-panel').style.display = 'block';
   document.getElementById('detalle-panel').scrollIntoView({ behavior: 'smooth' });
