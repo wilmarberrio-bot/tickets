@@ -78,7 +78,7 @@ class Tecnico(db.Model):
         ).count()
         en_curso = Ticket.query.filter(
             Ticket.tecnico_id == self.id,
-            Ticket.estado.in_(['EN_TRANSITO', 'EN_SITIO'])
+            Ticket.estado.in_(['ASIGNADO', 'EN_TRANSITO', 'EN_SITIO'])
         ).count()
         return {
             'id': self.id, 'nombre': self.nombre, 'zona': self.zona,
@@ -735,7 +735,7 @@ def get_tickets():
         q = q.filter(Ticket.tecnico_id == session['tecnico_id']).filter(
             db.or_(
                 db.and_(Ticket.fecha_apertura >= inicio_hoy, Ticket.fecha_apertura < fin_hoy),
-                Ticket.estado.in_(['EN_TRANSITO', 'EN_SITIO'])
+                Ticket.estado.in_(['ASIGNADO', 'EN_TRANSITO', 'EN_SITIO'])
             )
         )
     elif request.args.get('tecnico_id'):
@@ -915,14 +915,14 @@ def asignar_ticket(tid):
     tec = Tecnico.query.get_or_404(data.get('tecnico_id'))
 
     if t.estado in ['CERRADO', 'ESCALADO', 'CANCELADO']:
-        return jsonify({'error': f'No se puede asignar/reasignar un ticket en estado {t.estado}'}), 400
+        return jsonify({'error': f'No se puede asignar un ticket en estado {t.estado}'}), 400
 
     anterior = t.tecnico_rel.nombre if t.tecnico_rel else 'Sin asignar'
     mismo_tecnico = t.tecnico_id == tec.id
-    estaba_en_sitio = t.estado == 'EN_SITIO'
+    estaba_en_sitio = t.estado in ('EN_SITIO', 'EN_TRANSITO')
 
     t.tecnico_id = tec.id
-    t.estado = 'EN_TRANSITO'
+    t.estado = 'ASIGNADO'
     t.fecha_asignacion = now_colombia()
 
     # Si cambia de técnico y ya estaba en sitio, reiniciamos llegada para que
@@ -947,6 +947,22 @@ def asignar_ticket(tid):
     log_actividad(msg, 'assign', t.id, session.get('nombre'))
     db.session.commit()
     sync_ticket_to_sheets(t, action)
+    return jsonify(t.to_dict())
+
+
+@app.route('/api/tickets/<int:tid>/en-camino', methods=['PUT'])
+@require_login()
+def marcar_en_camino(tid):
+    t = Ticket.query.get_or_404(tid)
+    if session['rol'] == 'tecnico' and t.tecnico_id != session['tecnico_id']: abort(403)
+    if t.estado not in ('ASIGNADO', 'ABIERTO'):
+        return jsonify({'error': f'Estado actual {t.estado} no permite marcar en camino'}), 400
+    t.estado = 'EN_TRANSITO'
+    if not t.fecha_asignacion:
+        t.fecha_asignacion = now_colombia()
+    log_actividad(f"En camino — #{t.slack_num or t.id} {t.site}", 'assign', t.id, session.get('nombre'))
+    db.session.commit()
+    sync_ticket_to_sheets(t, 'en_camino')
     return jsonify(t.to_dict())
 
 
@@ -1002,7 +1018,7 @@ def cambiar_estado_ticket(tid):
     data = request.json or {}
     nuevo_estado = data.get('estado')
 
-    estados_validos = ['ABIERTO', 'EN_TRANSITO', 'EN_SITIO', 'ESCALADO']
+    estados_validos = ['ABIERTO', 'ASIGNADO', 'EN_TRANSITO', 'EN_SITIO', 'ESCALADO']
     if nuevo_estado not in estados_validos:
         return jsonify({'error': 'Estado inválido. Usa ABIERTO, EN_TRANSITO, EN_SITIO o ESCALADO.'}), 400
 
@@ -1115,7 +1131,7 @@ def eliminar_tecnico_permanente(tid):
     t = Tecnico.query.get_or_404(tid)
     activos = Ticket.query.filter(
         Ticket.tecnico_id == tid,
-        Ticket.estado.in_(['ABIERTO', 'EN_TRANSITO', 'EN_SITIO'])
+        Ticket.estado.in_(['ABIERTO', 'ASIGNADO', 'EN_TRANSITO', 'EN_SITIO'])
     ).count()
     if activos > 0:
         return jsonify({'error': f'El técnico tiene {activos} ticket(s) activo(s). Reasígnalos primero.'}), 400
@@ -1136,6 +1152,7 @@ def get_kpis():
     cerrados    = sum(1 for t in tickets if t.estado == 'CERRADO')
     reincid     = sum(1 for t in tickets if t.es_reincidente)
     sin_asignar = sum(1 for t in tickets if t.estado == 'ABIERTO' and not t.tecnico_id)
+    asignados   = sum(1 for t in tickets if t.estado == 'ASIGNADO')
     afectados   = sum(t.afectados for t in tickets if t.estado != 'CERRADO')
     fcr = round(sum(1 for t in tickets if t.estado == 'CERRADO' and not t.es_reincidente) / cerrados * 100) if cerrados else 0
     mttrs = [t.mttr_minutos for t in tickets if t.mttr_minutos]
@@ -1155,7 +1172,7 @@ def get_kpis():
 
     return jsonify({
         'total': total, 'abiertos': sum(1 for t in tickets if t.estado == 'ABIERTO'),
-        'sin_asignar': sin_asignar, 'en_transito': sum(1 for t in tickets if t.estado == 'EN_TRANSITO'),
+        'sin_asignar': sin_asignar, 'en_transito': sum(1 for t in tickets if t.estado in ('ASIGNADO','EN_TRANSITO')),
         'en_sitio': sum(1 for t in tickets if t.estado == 'EN_SITIO'), 'cerrados': cerrados,
         'afectados': afectados, 'reincidentes': reincid,
         'sites_rojo': len(set(f"{t.site} {t.torre}" for t in tickets if t.semaforo == 'ROJO')),
