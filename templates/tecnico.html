@@ -320,6 +320,9 @@ function tiempoAbierto(t) {
 }
 
 function accionesTicketTecnico(t) {
+  if (t.estado === 'ASIGNADO') {
+    return `<button class="btn btn-a btn-sm" onclick="marcarEnCamino(${t.id})">🚗 En camino</button>`;
+  }
   if (t.estado === 'EN_TRANSITO') {
     return `<button class="btn btn-a btn-sm" onclick="marcarEnSitio(${t.id})">📍 Llegué al sitio</button>`;
   }
@@ -431,6 +434,14 @@ function renderMisTickets() {
     : '<tr><td colspan="9" class="empty">No tienes tickets asignados actualmente</td></tr>';
 
   renderMobileCards();
+}
+
+async function marcarEnCamino(id) {
+  try {
+    await api(`/api/tickets/${id}/en-camino`, { method: 'PUT' });
+    toast('🚗 En camino al sitio', 'ok');
+    loadMisTickets();
+  } catch(e) { toast('Error: '+e.message, 'err'); }
 }
 
 async function marcarEnSitio(id) {
