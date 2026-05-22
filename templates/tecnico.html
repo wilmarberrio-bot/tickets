@@ -131,6 +131,7 @@
       <strong style="color:#e6edf3">Observación:</strong><br>
       <span id="det-obs-txt"></span>
     </div>
+    <div id="det-historial" style="padding:0 14px 14px;display:none"></div>
   </div>
 </div>
 
@@ -220,6 +221,18 @@
         <input type="number" id="c-pot" placeholder="Ej: -22.4" step="0.1">
       </div>
 
+      <div class="mf" style="margin-bottom:12px">
+        <label>Pruebas ejecutadas en sitio</label>
+        <textarea id="c-pruebas" rows="2" style="width:100%;background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#e6edf3;font-size:12px;outline:none;resize:vertical" placeholder="Ej: medición OPM, ping, trazado de ruta, prueba de puerto, test de cable..."></textarea>
+      </div>
+      <div class="mf" style="margin-bottom:12px">
+        <label>Hallazgos encontrados</label>
+        <textarea id="c-hallazgos" rows="2" style="width:100%;background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#e6edf3;font-size:12px;outline:none;resize:vertical" placeholder="Ej: patchcord dañado en puerto 3, switch con temperatura alta, fibra doblada..."></textarea>
+      </div>
+      <div class="mf" style="margin-bottom:12px">
+        <label>Soluciones intentadas pero descartadas</label>
+        <textarea id="c-descard" rows="2" style="width:100%;background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#e6edf3;font-size:12px;outline:none;resize:vertical" placeholder="Ej: reinicio no resolvió, cambio de puerto tampoco..."></textarea>
+      </div>
       <div class="mf" style="margin-bottom:12px">
         <label>Solución aplicada * <span id="c-sn" style="float:right;color:#8b949e">0/50 mín.</span></label>
         <textarea id="c-sol" rows="4" style="width:100%;background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#e6edf3;font-size:12px;outline:none;resize:vertical" placeholder="Describe paso a paso qué hiciste y cómo quedó el sistema. Sé específico: qué puerto, qué patchcord, qué configuración cambiaste, cómo verificaste que quedó OK..."></textarea>
@@ -532,6 +545,53 @@ function verDetalle(id) {
 
   document.getElementById('detalle-panel').style.display = 'block';
   document.getElementById('detalle-panel').scrollIntoView({ behavior: 'smooth' });
+
+  // ── Historial reiterativo anonimo (sin nombres de tecnicos) ──────────────
+  const panelHist = document.getElementById('det-historial');
+  if (t.es_reincidente && t.historial_operativo && t.historial_operativo.length > 0) {
+    const hist = t.historial_operativo;
+    const semC = {ROJO:'var(--rj2)',AMARILLO:'var(--am2)',VERDE:'var(--vd2)'}[t.semaforo]||'var(--am2)';
+    const filas = hist.map((e, i) => {
+      const acc = Array.isArray(e.acciones) ? e.acciones.join(', ') : (e.acciones||'—');
+      const fecha = e.fecha ? new Date(e.fecha).toLocaleDateString('es-CO') : '—';
+      const mttr = e.mttr_minutos ? Math.floor(e.mttr_minutos/60)+'h '+e.mttr_minutos%60+'m' : '—';
+      return `<div style="border:1px solid var(--g2);border-radius:6px;padding:12px;margin-bottom:10px;background:rgba(0,0,0,.2)">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <strong style="color:var(--az2);font-size:12px">Caso anterior #${i+1} — ${esc(e.site||'')} ${esc(e.torre||'')} | ${fecha}</strong>
+          <span style="font-size:10px;color:#8b949e">MTTR: ${mttr}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px;margin-bottom:8px">
+          <div><span style="color:#8b949e">ACC:</span> ${esc(e.acc_nombre||'—')}</div>
+          <div><span style="color:#8b949e">Edge:</span> ${esc(e.edge_nombre||'—')}</div>
+          <div><span style="color:#8b949e">Modelo:</span> ${esc(e.modelo||'—')}</div>
+          <div><span style="color:#8b949e">Tipo:</span> ${esc(e.tipo||'—')}</div>
+          <div><span style="color:#8b949e">Afectados:</span> ${e.afectados||0}</div>
+          <div><span style="color:#8b949e">ACC cierre:</span> ${esc(e.estado_acc||'—')}</div>
+        </div>
+        ${e.pruebas    ? `<div style="margin-bottom:4px;font-size:11px"><span style="color:#8b949e">🧪 Pruebas:</span> ${esc(e.pruebas)}</div>` : ''}
+        ${e.hallazgos  ? `<div style="margin-bottom:4px;font-size:11px"><span style="color:#8b949e">🔍 Hallazgos:</span> ${esc(e.hallazgos)}</div>` : ''}
+        ${acc!=='—'    ? `<div style="margin-bottom:4px;font-size:11px"><span style="color:#8b949e">🔧 Acciones:</span> ${esc(acc)}</div>` : ''}
+        ${e.solucion   ? `<div style="margin-bottom:4px;font-size:11px"><span style="color:#8b949e">✅ Solución:</span> ${esc(e.solucion)}</div>` : ''}
+        ${e.soluciones_desc ? `<div style="margin-bottom:4px;font-size:11px"><span style="color:#8b949e">❌ Descartado:</span> ${esc(e.soluciones_desc)}</div>` : ''}
+        ${e.causa_raiz ? `<div style="margin-bottom:4px;font-size:11px"><span style="color:#8b949e">⚠️ Causa raíz:</span> ${esc(e.causa_raiz)}</div>` : ''}
+        ${e.recomendacion ? `<div style="font-size:11px"><span style="color:#8b949e">💡 Recomendación:</span> ${esc(e.recomendacion)}</div>` : ''}
+        ${e.observacion ? `<div style="margin-top:4px;font-size:11px;color:#8b949e;font-style:italic">${esc(e.observacion)}</div>` : ''}
+      </div>`;
+    }).join('');
+    panelHist.style.display = 'block';
+    panelHist.innerHTML = `
+      <div style="background:rgba(255,170,0,.1);border-left:3px solid ${semC};border-radius:6px;padding:10px 14px;margin-bottom:10px">
+        <strong style="color:${semC}">⚠️ CASO REITERATIVO — Evento #${t.evento_num||'?'}</strong>
+        <div style="font-size:11px;color:#e6edf3;margin-top:3px">${esc(t.motivo_reincidencia||t.criterio_reincidencia||'')}</div>
+        <div style="font-size:11px;color:#8b949e;margin-top:2px">
+          Encontrados <strong style="color:${semC}">${hist.length} caso${hist.length>1?'s':''} anterior${hist.length>1?'es':''}</strong> en el mismo nodo.
+          Revisa el historial antes de intervenir para no repetir acciones fallidas.
+        </div>
+      </div>
+      ${filas}`;
+  } else {
+    if (panelHist) panelHist.style.display = 'none';
+  }
 }
 
 // ══════════════════════════════════════════
@@ -602,6 +662,9 @@ async function submitCierre(estadoFinal) {
         riesgo:        document.getElementById('c-riesgo').checked,
         desc_riesgo:   document.getElementById('c-riesgo-desc').value,
         recomendacion: document.getElementById('c-rec').value,
+        pruebas:       document.getElementById('c-pruebas').value || null,
+        hallazgos:     document.getElementById('c-hallazgos').value || null,
+        soluciones_desc: document.getElementById('c-descard').value || null,
       }
     });
 
@@ -614,7 +677,7 @@ async function submitCierre(estadoFinal) {
 
 function clearCierre() {
   ['c-ticket','c-causa','c-cl','c-esc'].forEach(id => document.getElementById(id).value='');
-  ['c-sol','c-rec','c-riesgo-desc'].forEach(id => document.getElementById(id).value='');
+  ['c-sol','c-rec','c-riesgo-desc','c-pruebas','c-hallazgos','c-descard'].forEach(id => document.getElementById(id).value='');
   ['c-pot'].forEach(id => document.getElementById(id).value='');
   document.querySelectorAll('input[name="acc"]').forEach(x => x.checked=false);
   document.getElementById('c-riesgo').checked = false;

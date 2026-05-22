@@ -685,10 +685,13 @@ function renderDetalleCierre(t) {
           <div><strong>Estado Edge:</strong> ${esc(c.estado_edge || '—')}</div>
           <div><strong>Estado Switch:</strong> ${esc(c.estado_switch || '—')}</div>
           <div><strong>Potencia / velocidad:</strong> ${c.potencia_dbm ?? '—'}</div>
-          <div style="grid-column:1/-1"><strong>Solución / notas de visita:</strong><br><span style="color:#c9d1d9">${esc(c.solucion || '—')}</span></div>
+          ${c.pruebas ? `<div style="grid-column:1/-1"><strong>🧪 Pruebas ejecutadas:</strong><br><span style="color:#c9d1d9">${esc(c.pruebas)}</span></div>` : ''}
+          ${c.hallazgos ? `<div style="grid-column:1/-1"><strong>🔍 Hallazgos:</strong><br><span style="color:#c9d1d9">${esc(c.hallazgos)}</span></div>` : ''}
+          ${c.soluciones_desc ? `<div style="grid-column:1/-1;background:rgba(248,81,73,.06);border:1px solid rgba(248,81,73,.2);border-radius:6px;padding:8px"><strong style="color:var(--rj2)">❌ Descartado:</strong><br>${esc(c.soluciones_desc)}</div>` : ''}
+          <div style="grid-column:1/-1"><strong>✅ Solución aplicada:</strong><br><span style="color:#c9d1d9">${esc(c.solucion || '—')}</span></div>
           ${esEscalado ? `<div style="grid-column:1/-1;background:rgba(210,153,34,.10);border:1px solid rgba(210,153,34,.35);border-radius:6px;padding:8px"><strong style="color:var(--am2)">🔺 Falla / motivo de escalamiento:</strong><br>${esc(c.escalamiento || 'Ticket marcado como escalado')}</div>` : ''}
           ${c.riesgo ? `<div style="grid-column:1/-1;background:rgba(248,81,73,.10);border:1px solid rgba(248,81,73,.35);border-radius:6px;padding:8px"><strong style="color:var(--rj2)">⚠ Riesgo futuro:</strong><br>${esc(c.desc_riesgo || 'Riesgo reportado sin descripción')}</div>` : ''}
-          ${c.recomendacion ? `<div style="grid-column:1/-1"><strong>Recomendación técnica:</strong><br>${esc(c.recomendacion)}</div>` : ''}
+          ${c.recomendacion ? `<div style="grid-column:1/-1"><strong>💡 Recomendación técnica:</strong><br>${esc(c.recomendacion)}</div>` : ''}
         </div>
       </div>`;
   } else if (['CERRADO','ESCALADO'].includes(t.estado)) {
@@ -739,23 +742,105 @@ function renderDetalleCierre(t) {
 
       ${cierreHtml}
 
-      ${Array.isArray(t.historial_operativo) && t.historial_operativo.length ? `
-      <div style="margin-top:12px;border:1px solid var(--g2);border-radius:8px;background:rgba(88,166,255,.06);padding:12px">
-        <strong style="color:var(--az2);font-size:13px">📚 Historial operativo relacionado (sin nombres)</strong>
-        <div style="font-size:12px;color:#c9d1d9;line-height:1.55;margin-top:8px">
-          ${t.historial_operativo.map(h => `
-            <div style="border-top:1px solid var(--g2);padding-top:8px;margin-top:8px">
-              <strong>#${esc(h.ticket || '')}</strong> · ${h.fecha ? fmtFecha(h.fecha) : '—'} · ${esc(h.tipo || '—')} · ${esc(h.estado || '—')}<br>
-              <strong>Motivo relación:</strong> ${esc(h.motivo || '—')}<br>
-              ${h.causa_raiz ? `<strong>Causa raíz:</strong> ${esc(h.causa_raiz)}<br>` : ''}
-              ${Array.isArray(h.acciones) && h.acciones.length ? `<strong>Acciones:</strong> ${esc(h.acciones.join(', '))}<br>` : ''}
-              ${h.solucion ? `<strong>Solución / hallazgo:</strong> ${esc(h.solucion)}<br>` : ''}
-              ${h.escalamiento ? `<strong>Escalamiento:</strong> ${esc(h.escalamiento)}<br>` : ''}
-              ${h.recomendacion ? `<strong>Recomendación:</strong> ${esc(h.recomendacion)}<br>` : ''}
-            </div>`).join('')}
-        </div>
+      <!-- Trazabilidad completa — solo coordinador, carga bajo demanda -->
+      ${t.es_reincidente ? `
+      <div id="traza-${t.id}" style="margin-top:12px">
+        <button class="btn btn-a btn-sm" onclick="cargarTrazabilidad(${t.id})" style="width:100%">
+          🔍 Ver trazabilidad completa del nodo (${t.evento_num||'?'} evento${(t.evento_num||1)>1?'s':''})
+        </button>
+        <div id="traza-data-${t.id}" style="margin-top:8px;display:none"></div>
       </div>` : ''}
     </div>`;
+}
+
+async function cargarTrazabilidad(tid) {
+  const btn = document.querySelector(`#traza-${tid} button`);
+  const panel = document.getElementById(`traza-data-${tid}`);
+  if (!panel) return;
+  if (panel.style.display !== 'none') { panel.style.display='none'; if(btn) btn.textContent = btn.textContent.replace('▲','🔍'); return; }
+  if (btn) btn.textContent = '⏳ Cargando trazabilidad...';
+  try {
+    const data = await api(`/api/tickets/${tid}/historial-coordinador`);
+    const evs = data.eventos || [];
+    if (!evs.length) { panel.innerHTML='<p style="color:#8b949e;font-size:12px;padding:8px 0">Sin historial registrado para este nodo en los últimos 12 meses.</p>'; panel.style.display='block'; return; }
+
+    // Métricas resumen
+    const tecnicos = data.tecnicos_involucrados || [];
+    const avgMttr = data.promedio_mttr ? `${Math.floor(data.promedio_mttr/60)}h ${data.promedio_mttr%60}m` : '—';
+    const intMin = data.intervalo_min_dias != null ? data.intervalo_min_dias+'d' : '—';
+    const intMax = data.intervalo_max_dias != null ? data.intervalo_max_dias+'d' : '—';
+
+    const metricasHtml = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:10px;background:var(--bg2);border-radius:6px">
+        <div style="text-align:center;min-width:80px">
+          <div style="font-size:20px;font-weight:700;color:var(--rj2)">${data.total_historico}</div>
+          <div style="font-size:10px;color:#8b949e">Eventos 12m</div>
+        </div>
+        <div style="text-align:center;min-width:80px">
+          <div style="font-size:20px;font-weight:700;color:var(--am2)">${tecnicos.length}</div>
+          <div style="font-size:10px;color:#8b949e">Técnicos</div>
+        </div>
+        <div style="text-align:center;min-width:80px">
+          <div style="font-size:20px;font-weight:700;color:var(--az2)">${avgMttr}</div>
+          <div style="font-size:10px;color:#8b949e">MTTR prom.</div>
+        </div>
+        <div style="text-align:center;min-width:80px">
+          <div style="font-size:16px;font-weight:700;color:#8b949e">${intMin}–${intMax}</div>
+          <div style="font-size:10px;color:#8b949e">Intervalo</div>
+        </div>
+        ${tecnicos.length ? `<div style="flex:1;min-width:120px;font-size:11px;padding-top:6px"><span style="color:#8b949e">Técnicos históricos:</span><br>${tecnicos.map(esc).join(', ')}</div>` : ''}
+      </div>`;
+
+    const filasHtml = evs.map((e, i) => {
+      const semC = {ROJO:'var(--rj2)',AMARILLO:'var(--am2)',VERDE:'var(--vd2)'}[e.criterio]||'var(--vd2)';
+      const acc = Array.isArray(e.acciones) ? e.acciones.join(', ') : (e.acciones||'—');
+      const mttr = e.mttr_minutos ? Math.floor(e.mttr_minutos/60)+'h '+e.mttr_minutos%60+'m' : '—';
+      const delta = e.delta_dias != null ? `${e.delta_dias}d antes` : '';
+      return `<div style="border:1px solid var(--g2);border-radius:6px;padding:12px;margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+          <div>
+            <strong style="color:var(--az2)">Evento #${i+1} — Ticket #${esc(e.ticket_ref)}</strong>
+            <span style="font-size:10px;color:#8b949e;margin-left:8px">${e.fecha_apertura?fmtFecha(e.fecha_apertura):'—'} ${delta?'| '+delta:''}</span>
+          </div>
+          <div style="display:flex;gap:8px;font-size:11px">
+            <span style="color:${semC};font-weight:600">${esc(e.criterio||'—')}</span>
+            <span style="color:#8b949e">MTTR: ${mttr}</span>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;font-size:11px;margin-bottom:8px">
+          <div><span style="color:#8b949e">Técnico asignado:</span><br><strong>${esc(e.tecnico_asignado||'—')}</strong></div>
+          <div><span style="color:#8b949e">Técnico cierre:</span><br><strong>${esc(e.tecnico_cierre||'—')}</strong></div>
+          <div><span style="color:#8b949e">Afectados / tipo:</span><br>${e.afectados||0} · ${esc(e.tipo||'—')}</div>
+        </div>
+        <div style="font-size:11px;display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px">
+          <div><span style="color:#8b949e">Causa raíz:</span> ${esc(e.causa_raiz||'—')}</div>
+          <div><span style="color:#8b949e">Estado ACC:</span> ${esc(e.estado_acc||'—')}</div>
+          ${acc!=='—' ? `<div style="grid-column:1/-1"><span style="color:#8b949e">Acciones:</span> ${esc(acc)}</div>` : ''}
+        </div>
+        ${e.pruebas ? `<div style="font-size:11px;margin-bottom:4px"><span style="color:#8b949e">🧪 Pruebas:</span> ${esc(e.pruebas)}</div>` : ''}
+        ${e.hallazgos ? `<div style="font-size:11px;margin-bottom:4px"><span style="color:#8b949e">🔍 Hallazgos:</span> ${esc(e.hallazgos)}</div>` : ''}
+        ${e.solucion ? `<div style="font-size:11px;margin-bottom:4px"><span style="color:#8b949e">✅ Solución:</span> ${esc(e.solucion)}</div>` : ''}
+        ${e.soluciones_desc ? `<div style="font-size:11px;margin-bottom:4px"><span style="color:#8b949e">❌ Descartado:</span> ${esc(e.soluciones_desc)}</div>` : ''}
+        ${e.recomendacion ? `<div style="font-size:11px;margin-bottom:4px"><span style="color:#8b949e">💡 Recomendación:</span> ${esc(e.recomendacion)}</div>` : ''}
+        ${e.riesgo ? `<div style="font-size:11px;color:var(--rj2)">⚠ Riesgo: ${esc(e.desc_riesgo||'reportado')}</div>` : ''}
+      </div>`;
+    }).join('');
+
+    panel.innerHTML = `
+      <div style="border:1px solid var(--rj2);border-radius:8px;padding:14px;background:rgba(248,81,73,.05)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <strong style="color:var(--rj2)">🔍 Trazabilidad completa del nodo — ${esc(data.ticket_actual?.site||'')} ${esc(data.ticket_actual?.torre||'')}</strong>
+          <span style="font-size:10px;color:#8b949e">${data.criterio||''} | ${esc(data.motivo||'')}</span>
+        </div>
+        ${metricasHtml}
+        ${filasHtml}
+      </div>`;
+    panel.style.display = 'block';
+    if (btn) btn.textContent = '▲ Ocultar trazabilidad';
+  } catch(e) {
+    toast('Error cargando trazabilidad: ' + e.message, 'err');
+    if (btn) btn.textContent = '🔍 Ver trazabilidad completa';
+  }
 }
 
 async function showTopo(id) {
