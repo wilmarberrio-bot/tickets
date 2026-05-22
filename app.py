@@ -412,7 +412,18 @@ def _historial_operativo_anonimo(ticket, limit=5):
 
 
 def evaluar_reincidencia(ticket):
-    """Clasifica reincidencia con ventana móvil de 30 días."""
+    """Clasifica reincidencia con ventana móvil de 30 días.
+
+    Niveles de criticidad:
+      CRITICO (ROJO)  : ≥3 eventos similares/30d, ó ≥3 en mismo ACC/EDGE,
+                        ó ≥2 usuarios/MACs repetidos, ó (≥50 afectados en evento único),
+                        ó (≥2 similares Y ≥30 afectados)
+      ALERTA (AMARILLO): ≥2 eventos similares/30d, ó mismo site 2 veces,
+                         ó mismo ACC/EDGE 2 veces, ó 1 usuario/MAC repetido,
+                         ó evento único con ≥30 afectados sin reincidencia
+      ESTABLE (VERDE)  : primer evento en el site/ACC sin patrones repetitivos
+                         y menos de 30 afectados
+    """
     base_fecha = ticket.fecha_apertura or now_colombia()
     inicio = base_fecha - timedelta(days=30)
     candidatos = Ticket.query.filter(
@@ -439,33 +450,68 @@ def evaluar_reincidencia(ticket):
                 if r not in motivos:
                     motivos.append(r)
     ticket.evento_num = max(site_count, similar_count)
-    masivo = int(ticket.afectados or 0) >= 10
-    if similar_count >= 3 or acc_edge_count >= 3 or repeated_users >= 2 or (masivo and similar_count >= 2):
+    afect = int(ticket.afectados or 0)
+    # Umbrales de afectados: 30+ = evento masivo (ALERTA); 50+ = evento crítico (ROJO)
+    masivo      = afect >= 30   # Suficientemente grande para escalar a ALERTA solo
+    masivo_crit = afect >= 50   # Tan grande que escala a CRITICO aunque sea primer evento
+
+    # ── Construir explicación de afectados ──────────────────────────────────────
+    if afect > 0:
+        motivos.append(f'{afect} usuarios afectados')
+
+    # ── Clasificar ──────────────────────────────────────────────────────────────
+    if masivo_crit or similar_count >= 3 or acc_edge_count >= 3 or repeated_users >= 2 \
+            or (masivo and similar_count >= 2):
         ticket.semaforo = 'ROJO'
         ticket.es_reincidente = True
         ticket.criterio_reincidencia = 'CRITICO'
-        base = f'{similar_count} incidencias similares/30 días'
-    elif similar_count >= 2 or site_count >= 2 or acc_edge_count >= 2 or repeated_users >= 1 or masivo:
+        razones_base = []
+        if masivo_crit:
+            razones_base.append(f'evento masivo: {afect} afectados ≥50')
+        if similar_count >= 3:
+            razones_base.append(f'{similar_count} eventos similares en 30 días')
+        if acc_edge_count >= 3:
+            razones_base.append(f'{acc_edge_count} fallas en mismo ACC/EDGE')
+        if repeated_users >= 2:
+            razones_base.append(f'{repeated_users} usuarios/MACs repetidos')
+        if masivo and similar_count >= 2:
+            razones_base.append(f'{afect} afectados + {similar_count} repeticiones')
+        base = ' | '.join(razones_base) if razones_base else f'{similar_count} eventos similares/30 días'
+    elif similar_count >= 2 or site_count >= 2 or acc_edge_count >= 2 \
+            or repeated_users >= 1 or masivo:
         ticket.semaforo = 'AMARILLO'
         ticket.es_reincidente = True
         ticket.criterio_reincidencia = 'ALERTA'
-        base = f'{similar_count} incidencia(s) similar(es)/30 días'
+        razones_base = []
+        if masivo and similar_count < 2:
+            razones_base.append(f'evento único con {afect} afectados ≥30')
+        if similar_count >= 2:
+            razones_base.append(f'{similar_count} eventos similares en 30 días')
+        if site_count >= 2:
+            razones_base.append(f'{site_count} eventos en mismo site/torre')
+        if acc_edge_count >= 2:
+            razones_base.append(f'{acc_edge_count} fallas en mismo ACC/EDGE')
+        if repeated_users >= 1:
+            razones_base.append(f'{repeated_users} usuario(s)/MAC repetido(s)')
+        base = ' | '.join(razones_base) if razones_base else f'{similar_count} incidencia(s)/30 días'
     else:
         ticket.semaforo = 'VERDE'
         ticket.es_reincidente = False
         ticket.criterio_reincidencia = 'ESTABLE'
-        base = 'caso aislado: sin patrón repetitivo en últimos 30 días'
-    if masivo and 'evento masivo por cantidad de afectados' not in motivos:
-        motivos.append('evento masivo por cantidad de afectados')
+        base = f'primer evento en este site/ACC — {afect} afectados — sin patrón repetitivo en 30 días'
+
+    # ── Motivos complementarios ─────────────────────────────────────────────────
     if site_count >= 2 and 'repetición por site/torre' not in motivos:
-        motivos.append('repetición por site/torre')
+        motivos.append(f'repetición site/torre ({site_count}x)')
     if acc_edge_count >= 2 and 'repetición por ACC/EDGE' not in motivos:
-        motivos.append('repetición por ACC/EDGE')
-    if repeated_users:
+        motivos.append(f'repetición ACC/EDGE ({acc_edge_count}x)')
+    if repeated_users and not any('MAC' in m for m in motivos):
         motivos.append(f'{repeated_users} usuario(s)/MAC repetido(s)')
-    ticket.motivo_reincidencia = f"{ticket.criterio_reincidencia} | {base}"
+    ticket.motivo_reincidencia = f"{ticket.criterio_reincidencia} — {base}"
     if motivos:
-        ticket.motivo_reincidencia += ' | ' + '; '.join(motivos[:8])
+        extras = [m for m in motivos if m not in base]
+        if extras:
+            ticket.motivo_reincidencia += ' | ' + '; '.join(extras[:6])
 
 
 def _periodo_inicio_fin(mes_str):
@@ -1611,74 +1657,4 @@ def webhook_slack():
         torre           = parsed.get('torre', 'Torre 1'),
         zona            = parsed.get('zona'),
         acc_nombre      = parsed.get('acc_nombre'),
-        acc_ip          = parsed.get('acc_ip'),
-        edge_nombre     = parsed.get('edge_nombre'),
-        edge_ip         = parsed.get('edge_ip'),
-        modelo          = parsed.get('modelo'),
-        tipo            = parsed.get('tipo', 'Ausencia de Servicio'),
-        afectados       = int(parsed.get('afectados', 0)),
-        observacion     = parsed.get('observacion'),
-        macs            = json.dumps(parsed.get('macs', [])),
-        topologia_url   = parsed.get('topologia_url'),
-        ubicacion_url   = parsed.get('ubicacion_url'),
-        appointment_num = parsed.get('appointment_num'),
-        raw_mensaje     = texto,
-        fecha_apertura  = now_colombia(),
-    )
-    
-    db.session.add(t); db.session.flush()
-    evaluar_reincidencia(t)
-    log_actividad(f"Ticket #{t.slack_num or t.id} desde Slack — {t.site} {t.torre}", 'new', t.id, 'Slack Bot')
-    db.session.commit()
-    sync_ticket_to_sheets(t, 'created_slack')
-    return jsonify({'created': True, 'ticket_id': t.id, 'slack_num': t.slack_num}), 201
-
-
-# ─── Init ─────────────────────────────────────────────
-
-
-def seed_db():
-    pass  # DB inicia limpia. Agrega técnicos reales desde el panel Coordinador.
-
-
-def ensure_schema_updates():
-    """
-    Actualizaciones pequeñas de esquema para PostgreSQL.
-    db.create_all() crea tablas nuevas, pero no agrega columnas nuevas
-    a tablas ya existentes.
-    """
-    try:
-        with db.engine.begin() as conn:
-            conn.exec_driver_sql(
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS zona VARCHAR(50)"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tecnicos ADD COLUMN IF NOT EXISTS pin_hash VARCHAR(255)"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS criterio_reincidencia VARCHAR(20) DEFAULT 'ESTABLE'"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS motivo_reincidencia TEXT"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS fecha_cancelacion TIMESTAMP"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS motivo_cancelacion TEXT"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS cancelado_por VARCHAR(80)"
-            )
-    except Exception as e:
-        print(f"[WARN] No se pudo actualizar schema: {e}")
-
-
-with app.app_context():
-    db.create_all()
-    ensure_schema_updates()
-    seed_db()
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true')
+        acc
