@@ -80,6 +80,7 @@ tr:hover td{background:#1c2128}
 /* Status badges */
 .sb{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;border:1px solid}
 .sb-ABIERTO{color:var(--rj2);border-color:var(--rj2);background:#2d1b1b}
+.sb-ASIGNADO{color:var(--az2);border-color:var(--az2);background:#001a2d}
 .sb-EN_TRANSITO{color:var(--am2);border-color:var(--am2);background:#2d2200}
 .sb-EN_SITIO{color:var(--az2);border-color:var(--az2);background:#0d1f36}
 .sb-CERRADO{color:var(--vd2);border-color:var(--vd2);background:#0a1f12}
