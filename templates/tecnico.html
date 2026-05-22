@@ -131,6 +131,7 @@
       <strong style="color:#e6edf3">Observación:</strong><br>
       <span id="det-obs-txt"></span>
     </div>
+    <div id="det-historial" style="padding:0 14px 14px;font-size:12px;color:#8b949e;display:none"></div>
   </div>
 </div>
 
@@ -448,7 +449,7 @@ function irACierre(id) {
   loadTicketCierre();
 }
 
-function verDetalle(id) {
+async function verDetalle(id) {
   const t = MIS_TICKETS.find(x => x.id === id);
   if (!t) return;
   document.getElementById('det-titulo').textContent = `#${t.slack_num||t.id} — ${t.site} ${t.torre||''}`;
@@ -461,7 +462,7 @@ function verDetalle(id) {
     <strong>Modelo:</strong> ${t.modelo||'—'}<br>
     <strong>Estado:</strong> <span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span><br>
     ${t.appointment_num ? `<strong>Appointment:</strong> #${t.appointment_num}<br>` : ''}
-    ${t.es_reincidente ? '<strong style="color:var(--rj2)">⚠ Reincidente</strong><br>' : ''}
+    ${t.es_reincidente ? '<strong style="color:var(--rj2)">⚠ Reincidente / revisar historial</strong><br>' : ''}
     ${t.motivo_reincidencia ? `<strong>Motivo reinc.:</strong> ${t.motivo_reincidencia}<br>` : ''}
   `;
   const ok = t.estado === 'CERRADO';
@@ -489,6 +490,36 @@ function verDetalle(id) {
     obsEl.style.display = 'block';
     document.getElementById('det-obs-txt').textContent = t.observacion;
   } else { obsEl.style.display = 'none'; }
+
+  const histEl = document.getElementById('det-historial');
+  histEl.style.display = 'none';
+  histEl.innerHTML = '';
+  if (t.es_reincidente) {
+    try {
+      const h = await api(`/api/tickets/${id}/historial-contexto`);
+      if (h.historial && h.historial.length) {
+        histEl.style.display = 'block';
+        histEl.innerHTML = `<div style="border:1px solid var(--am);border-radius:8px;padding:10px;background:#2d2200;color:#d29922;margin-top:8px">
+          <strong>🔁 Historial operativo similar</strong><br>
+          <span style="font-size:11px;color:#c9a23f">Se ocultan nombres de técnicos anteriores. Usa esto como contexto para no repetir pruebas.</span>
+          <div style="margin-top:8px;display:grid;gap:8px">
+            ${h.historial.map(x => `<div style="background:var(--g1);border:1px solid var(--g2);border-radius:6px;padding:8px;color:#c9d1d9">
+              <strong>#${x.ticket}</strong> · ${x.fecha ? new Date(x.fecha).toLocaleDateString('es-CO') : '—'} · ${x.estado}<br>
+              <span style="font-size:11px;color:#8b949e">Coincide por: ${(x.razones||[]).join(', ') || 'patrón similar'}</span><br>
+              ${x.causa_raiz ? `<strong>Causa:</strong> ${x.causa_raiz}<br>` : ''}
+              ${x.acciones?.length ? `<strong>Acciones:</strong> ${x.acciones.join(', ')}<br>` : ''}
+              ${x.solucion ? `<strong>Solución / hallazgo:</strong> ${x.solucion}<br>` : ''}
+              ${x.escalamiento ? `<strong>Escalamiento:</strong> ${x.escalamiento}<br>` : ''}
+              ${x.recomendacion ? `<strong>Recomendación:</strong> ${x.recomendacion}` : ''}
+            </div>`).join('')}
+          </div>
+        </div>`;
+      }
+    } catch(e) {
+      histEl.style.display = 'block';
+      histEl.innerHTML = `<span style="color:var(--rj2)">No se pudo cargar historial: ${e.message}</span>`;
+    }
+  }
 
   document.getElementById('detalle-panel').style.display = 'block';
   document.getElementById('detalle-panel').scrollIntoView({ behavior: 'smooth' });

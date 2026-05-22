@@ -203,10 +203,13 @@ Usuarios afectados:
     <label>Desde</label><input type="date" id="rc-d" onchange="applyF('rc')">
     <label>Hasta</label><input type="date" id="rc-h" onchange="applyF('rc')">
   </div>
-  <div class="alert-strip amarillo">⚙️ <strong>Motor activo:</strong>&nbsp;R1: Site ≥3 eventos/mes → ROJO | R2: ACC ≥2 eventos/mes → AMARILLO | R6: >10 afectados → Masivo</div>
+  <div class="alert-strip amarillo" style="justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <span>⚙️ <strong>Motor activo:</strong>&nbsp;CRÍTICO: ≥3 incidencias similares/30 días o usuarios repetidos | ALERTA: ≥2 incidencias similares/30 días | ESTABLE: caso aislado</span>
+    <button class="btn btn-a btn-sm" onclick="recalcularReincidencias()">🔄 Recalcular criterios</button>
+  </div>
   <div class="three-col" id="rc-panels"></div>
   <div class="panel"><div class="ph"><h3>📋 Tickets reincidentes</h3><span class="badge" id="rc-badge">0</span></div>
-    <div class="tw"><table><thead><tr><th>Ticket</th><th>Fecha</th><th>Site / Torre</th><th>Evento #</th><th>Semáforo</th><th>Técnico</th><th>Estado</th></tr></thead>
+    <div class="tw"><table><thead><tr><th>Ticket</th><th>Fecha</th><th>Site / Torre</th><th>Evento #</th><th>Criterio</th><th>Motivo</th><th>Estado</th></tr></thead>
       <tbody id="rc-tbody"></tbody></table></div></div>
 </div>
 
@@ -960,39 +963,59 @@ async function loadReinc() {
   if (F.rc.h) params.set('hasta', F.rc.h);
   const tickets = await api('/api/tickets?' + params);
 
-  const rojo   = [...new Set(tickets.filter(t=>t.semaforo==='ROJO').map(t=>t.site+' '+(t.torre||'')))];
-  const amarill= [...new Set(tickets.filter(t=>t.semaforo==='AMARILLO').map(t=>t.site+' '+(t.torre||'')))];
-  const verde  = [...new Set(tickets.filter(t=>t.semaforo==='VERDE').map(t=>t.site+' '+(t.torre||'')))].filter(s=>!rojo.includes(s)&&!amarill.includes(s));
+  const uniqueSites = (estado) => [...new Set(tickets.filter(t => t.semaforo === estado).map(t => t.site + ' ' + (t.torre || '')))] ;
+  const rojo = uniqueSites('ROJO');
+  const amarill = uniqueSites('AMARILLO');
+  const verde = uniqueSites('VERDE').filter(s => !rojo.includes(s) && !amarill.includes(s));
 
   const mk = (title, col, items) =>
     `<div class="panel"><div class="ph"><h3>${title}</h3><span class="badge">${items.length}</span></div>
     <div class="tl">${items.length ? items.map((s,i) => {
-      const tks = tickets.filter(t => t.site+' '+(t.torre||'') === s);
+      const tks = tickets.filter(t => t.site + ' ' + (t.torre || '') === s);
+      const ref = tks.find(t => t.motivo_reincidencia) || tks[0] || {};
+      const criterio = ref.criterio_reincidencia || (ref.semaforo === 'ROJO' ? 'CRITICO' : ref.semaforo === 'AMARILLO' ? 'ALERTA' : 'ESTABLE');
       return `<div class="tl-i"><div class="tl-l"><div class="tl-d" style="background:${col}"></div>${i<items.length-1?'<div class="tl-c"></div>':''}</div>
-        <div class="tl-b"><div class="tl-t">${s}</div><div class="tl-m">${tks.length} evento${tks.length>1?'s':''} | ${tks[0]?.acc_nombre||''}</div></div></div>`;
+        <div class="tl-b"><div class="tl-t">${s}</div>
+        <div class="tl-m">${tks.length} evento${tks.length>1?'s':''} | ${criterio} | ${ref.motivo_reincidencia || ref.acc_nombre || 'sin motivo detallado'}</div></div></div>`;
     }).join('') : '<p class="empty">Sin sites en este nivel</p>'}</div></div>`;
 
   document.getElementById('rc-panels').innerHTML =
     mk('🔴 Sites CRÍTICOS','var(--rj2)',rojo) +
     mk('🟡 Sites EN ALERTA','var(--am2)',amarill) +
-    mk('🟢 Sites ESTABLES','var(--vd2)',verde.slice(0,5));
+    mk('🟢 Sites ESTABLES','var(--vd2)',verde.slice(0,8));
 
   const reinc = tickets.filter(t => t.es_reincidente);
   document.getElementById('rc-badge').textContent = reinc.length;
   document.getElementById('rc-tbody').innerHTML = reinc.length
     ? reinc.map(t => {
         const semC = {ROJO:'var(--rj2)',AMARILLO:'var(--am2)',VERDE:'var(--vd2)'}[t.semaforo]||'var(--vd2)';
+        const criterio = t.criterio_reincidencia || (t.semaforo === 'ROJO' ? 'CRITICO' : 'ALERTA');
         return `<tr>
           <td style="color:var(--az2)">#${t.slack_num||t.id}</td>
           <td style="font-size:11px">${t.fecha_apertura?new Date(t.fecha_apertura).toLocaleDateString('es-CO'):'—'}</td>
-          <td>${t.site} / ${t.torre||''}</td>
+          <td>${t.site} / ${t.torre||''}<br><span style="font-size:10px;color:#8b949e">${t.acc_nombre||''} ${t.acc_ip||''}</span></td>
           <td style="font-weight:700">Evento #${t.evento_num}</td>
-          <td><span class="sem ${t.semaforo==='ROJO'?'sr':t.semaforo==='AMARILLO'?'sy':'sg'}"></span> <span style="color:${semC}">${t.semaforo}</span></td>
-          <td>${t.tecnico_nombre||'—'}</td>
+          <td><span class="sem ${t.semaforo==='ROJO'?'sr':t.semaforo==='AMARILLO'?'sy':'sg'}"></span> <span style="color:${semC}">${criterio}</span></td>
+          <td style="font-size:11px;color:#8b949e;max-width:420px;white-space:normal">${t.motivo_reincidencia || 'Sin motivo detallado'}</td>
           <td><span class="sb sb-${t.estado}">${t.estado.replace('_',' ')}</span></td>
         </tr>`;
       }).join('')
     : '<tr><td colspan="7" class="empty">Sin reincidencias en el periodo</td></tr>';
+}
+
+async function recalcularReincidencias() {
+  if (!confirm('¿Recalcular criterios de reincidencia para el período seleccionado?')) return;
+  try {
+    const res = await api('/api/reincidencias/recalcular', {
+      method: 'POST',
+      body: { desde: F.rc.d, hasta: F.rc.h }
+    });
+    toast(`✅ Recalculados ${res.recalculados} tickets: ${res.criticos} críticos, ${res.alerta} en alerta, ${res.estables} estables`, 'ok');
+    loadReinc();
+    loadDashboard();
+  } catch(e) {
+    toast('Error al recalcular: ' + e.message, 'err');
+  }
 }
 
 // ══════════════════════════════════════════
@@ -1330,7 +1353,7 @@ function exportarPDF() {
 }
 
 async function sincronizarGoogleSheets() {
-  if (!confirm('¿Sincronizar todos los tickets actuales con Google Sheets? Esto actualizará filas existentes y agregará las que falten.')) return;
+  if (!confirm('¿Sincronizar todos los tickets actuales con Google Sheets? Esto actualizará filas existentes y agregará las que falten. Si cambiaste criterios de reincidencia, usa primero Recalcular criterios.')) return;
 
   try {
     showToast('🔄 Sincronizando tickets con Google Sheets...', 'warn');
