@@ -109,14 +109,17 @@ class Ticket(db.Model):
     estado          = db.Column(db.String(20), default='ABIERTO')
     semaforo        = db.Column(db.String(10), default='VERDE')
     es_reincidente  = db.Column(db.Boolean, default=False)
-    evento_num      = db.Column(db.Integer, default=1)
     criterio_reincidencia = db.Column(db.String(20), default='ESTABLE')
     motivo_reincidencia   = db.Column(db.Text)
+    evento_num      = db.Column(db.Integer, default=1)
     tecnico_id      = db.Column(db.Integer, db.ForeignKey('tecnicos.id'), nullable=True)
     fecha_apertura  = db.Column(db.DateTime, default=now_colombia)
     fecha_asignacion= db.Column(db.DateTime)
     fecha_llegada   = db.Column(db.DateTime)
     fecha_cierre    = db.Column(db.DateTime)
+    fecha_cancelacion = db.Column(db.DateTime)
+    motivo_cancelacion = db.Column(db.Text)
+    cancelado_por   = db.Column(db.String(80))
     raw_mensaje     = db.Column(db.Text)
     cierre          = db.relationship('Cierre', backref='ticket', uselist=False, lazy=True,
                                       cascade='all, delete-orphan')
@@ -150,17 +153,21 @@ class Ticket(db.Model):
             'estado': self.estado,
             'semaforo': self.semaforo,
             'es_reincidente': self.es_reincidente,
-            'evento_num': self.evento_num,
             'criterio_reincidencia': self.criterio_reincidencia,
             'motivo_reincidencia': self.motivo_reincidencia,
+            'evento_num': self.evento_num,
             'tecnico_id': self.tecnico_id,
             'tecnico_nombre': tec.nombre if tec else None,
             'fecha_apertura': self.fecha_apertura.isoformat() if self.fecha_apertura else None,
             'fecha_asignacion': self.fecha_asignacion.isoformat() if self.fecha_asignacion else None,
             'fecha_llegada': self.fecha_llegada.isoformat() if self.fecha_llegada else None,
             'fecha_cierre': self.fecha_cierre.isoformat() if self.fecha_cierre else None,
+            'fecha_cancelacion': self.fecha_cancelacion.isoformat() if self.fecha_cancelacion else None,
+            'motivo_cancelacion': self.motivo_cancelacion,
+            'cancelado_por': self.cancelado_por,
             'mttr_minutos': self.mttr_minutos,
             'cierre': self.cierre.to_dict() if self.cierre else None,
+            'historial_operativo': _historial_operativo_anonimo(self) if self.es_reincidente else [],
         }
 
 
@@ -259,12 +266,12 @@ def log_actividad(texto, tipo, ticket_id=None, usuario=None):
 def sync_ticket_to_sheets(ticket, action='upsert'):
     """Envía una copia del ticket a Google Sheets vía Apps Script.
 
-    Retorna siempre (ok, mensaje). La operación principal no debe romperse
-    si Google falla, pero la sincronización manual sí necesita un resultado.
+    Siempre retorna (ok: bool, mensaje: str). La sincronización es opcional:
+    si GOOGLE_SHEETS_WEBHOOK_URL no existe, no rompe la operación principal.
     """
     url = os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip()
     if not url:
-        return False, 'GOOGLE_SHEETS_WEBHOOK_URL no está configurada'
+        return True, 'GOOGLE_SHEETS_WEBHOOK_URL no configurada; sincronización omitida'
 
     try:
         payload = json.dumps({
@@ -282,195 +289,183 @@ def sync_ticket_to_sheets(ticket, action='upsert'):
         with urllib.request.urlopen(req, timeout=12) as resp:
             body = resp.read().decode('utf-8', errors='replace')
             if resp.status >= 400:
-                return False, f'Google Sheets HTTP {resp.status}: {body[:300]}'
+                msg = f'Google Sheets HTTP {resp.status}: {body[:300]}'
+                print(f'[WARN] {msg}')
+                return False, msg
             try:
                 parsed = json.loads(body or '{}')
                 if parsed.get('ok') is False:
-                    return False, parsed.get('error') or body[:300]
+                    msg = parsed.get('error') or body[:300] or 'Apps Script respondió ok=false'
+                    print(f'[WARN] Google Sheets sync falló: {msg}')
+                    return False, msg
             except Exception:
                 pass
             return True, 'ok'
-    except urllib.error.HTTPError as e:
-        try:
-            body = e.read().decode('utf-8', errors='replace')
-        except Exception:
-            body = str(e)
-        msg = f'Google Sheets HTTP {e.code}: {body[:300]}'
-        print(f"[WARN] {msg}")
-        return False, msg
     except Exception as e:
-        msg = str(e)
-        print(f"[WARN] No se pudo sincronizar ticket con Google Sheets: {msg}")
+        msg = f'{e.__class__.__name__}: {e}'
+        print(f'[WARN] No se pudo sincronizar ticket con Google Sheets: {msg}')
         return False, msg
 
 
-def _norm_text(value):
-    value = (value or '').strip().lower()
-    value = re.sub(r'\s+', ' ', value)
-    return value
+def _norm_txt(value):
+    return re.sub(r'\s+', ' ', str(value or '').strip().lower())
+
+
+def _norm_mac(value):
+    return re.sub(r'[^0-9a-f]', '', str(value or '').lower())
 
 
 def _ticket_macs(ticket):
-    if not ticket.macs:
-        return set()
     try:
-        raw = json.loads(ticket.macs)
+        raw = json.loads(ticket.macs) if ticket.macs else []
     except Exception:
-        return set()
-    out = set()
-    for item in raw or []:
+        raw = []
+    result = set()
+    for item in raw:
         if isinstance(item, dict):
-            mac = item.get('mac') or ''
+            mac = _norm_mac(item.get('mac'))
         else:
-            mac = str(item or '')
-        mac = mac.strip().upper()
-        if mac:
-            out.add(mac)
-    return out
+            mac = _norm_mac(item)
+        if len(mac) >= 12:
+            result.add(mac)
+    return result
 
 
-def _similaridad_ticket(actual, otro):
-    """Puntúa similitud operativa para reincidencia."""
+def _same_or_empty(a, b):
+    a = _norm_txt(a); b = _norm_txt(b)
+    return bool(a and b and a == b)
+
+
+def _similar_affectation(a, b):
+    try:
+        a = int(a or 0); b = int(b or 0)
+    except Exception:
+        return False
+    if a <= 0 or b <= 0:
+        return False
+    return abs(a - b) <= max(1, round(max(a, b) * 0.25))
+
+
+def _similar_ticket(base, other):
     score = 0
-    razones = []
-
-    mismo_site = _norm_text(actual.site) and _norm_text(actual.site) == _norm_text(otro.site)
-    misma_torre = _norm_text(actual.torre) and _norm_text(actual.torre) == _norm_text(otro.torre)
-    if mismo_site and misma_torre:
+    reasons = []
+    if _same_or_empty(base.site, other.site) and _same_or_empty(base.torre, other.torre):
+        score += 2; reasons.append('mismo site/torre')
+    if _same_or_empty(base.acc_nombre, other.acc_nombre) or _same_or_empty(base.acc_ip, other.acc_ip):
+        score += 2; reasons.append('mismo ACC')
+    if _same_or_empty(base.edge_nombre, other.edge_nombre) or _same_or_empty(base.edge_ip, other.edge_ip):
+        score += 2; reasons.append('mismo EDGE')
+    if _same_or_empty(base.modelo, other.modelo):
+        score += 1; reasons.append('mismo modelo')
+    if _same_or_empty(base.tipo, other.tipo):
+        score += 1; reasons.append('mismo tipo de problema')
+    if _similar_affectation(base.afectados, other.afectados):
+        score += 1; reasons.append('afectación similar')
+    common_macs = _ticket_macs(base).intersection(_ticket_macs(other))
+    if common_macs:
         score += 3
-        razones.append('mismo site/torre')
-    elif mismo_site:
-        score += 2
-        razones.append('mismo site')
+        reasons.append(f'{len(common_macs)} usuario(s)/MAC repetido(s)')
+    return score, reasons, len(common_macs)
 
-    mismo_acc = False
-    if actual.acc_ip and otro.acc_ip and actual.acc_ip == otro.acc_ip:
-        mismo_acc = True
-    if _norm_text(actual.acc_nombre) and _norm_text(actual.acc_nombre) == _norm_text(otro.acc_nombre):
-        mismo_acc = True
-    if mismo_acc:
-        score += 3
-        razones.append('mismo ACC')
 
-    mismo_edge = False
-    if actual.edge_ip and otro.edge_ip and actual.edge_ip == otro.edge_ip:
-        mismo_edge = True
-    if _norm_text(actual.edge_nombre) and _norm_text(actual.edge_nombre) == _norm_text(otro.edge_nombre):
-        mismo_edge = True
-    if mismo_edge:
-        score += 2
-        razones.append('mismo EDGE')
-
-    if _norm_text(actual.modelo) and _norm_text(actual.modelo) == _norm_text(otro.modelo):
-        score += 1
-        razones.append('mismo modelo')
-
-    if _norm_text(actual.tipo) and _norm_text(actual.tipo) == _norm_text(otro.tipo):
-        score += 2
-        razones.append('mismo tipo de problema')
-
-    if actual.afectados and otro.afectados:
-        if actual.afectados == otro.afectados:
-            score += 1
-            razones.append('misma afectación')
-        elif abs(int(actual.afectados) - int(otro.afectados)) <= 1:
-            score += 1
-            razones.append('afectación similar')
-
-    macs_actual = _ticket_macs(actual)
-    macs_otro = _ticket_macs(otro)
-    macs_comunes = macs_actual.intersection(macs_otro)
-    if macs_comunes:
-        score += 3 + min(len(macs_comunes), 3)
-        razones.append(f'{len(macs_comunes)} usuario(s)/MAC repetido(s)')
-
-    return score, razones, macs_comunes
+def _historial_operativo_anonimo(ticket, limit=5):
+    """Historial para continuidad técnica sin mostrar nombres de técnicos anteriores."""
+    inicio = (ticket.fecha_apertura or now_colombia()) - timedelta(days=30)
+    candidatos = Ticket.query.filter(
+        Ticket.id != ticket.id,
+        Ticket.fecha_apertura >= inicio
+    ).order_by(Ticket.fecha_apertura.desc()).limit(120).all()
+    eventos = []
+    for other in candidatos:
+        score, reasons, common_macs = _similar_ticket(ticket, other)
+        if score < 3:
+            continue
+        cierre = other.cierre
+        try:
+            acciones = json.loads(cierre.acciones) if cierre and cierre.acciones else []
+        except Exception:
+            acciones = []
+        eventos.append({
+            'ticket': other.slack_num or other.id,
+            'fecha': other.fecha_apertura.isoformat() if other.fecha_apertura else None,
+            'estado': other.estado,
+            'site': other.site,
+            'torre': other.torre,
+            'tipo': other.tipo,
+            'afectados': other.afectados,
+            'criterio': other.criterio_reincidencia or other.semaforo,
+            'motivo': other.motivo_reincidencia or '; '.join(reasons),
+            'causa_raiz': cierre.causa_raiz if cierre else None,
+            'clasificacion': cierre.clasificacion if cierre else None,
+            'acciones': acciones,
+            'estado_acc': cierre.estado_acc if cierre else None,
+            'estado_edge': cierre.estado_edge if cierre else None,
+            'estado_switch': cierre.estado_switch if cierre else None,
+            'solucion': cierre.solucion if cierre else None,
+            'escalamiento': cierre.escalamiento if cierre else None,
+            'recomendacion': cierre.recomendacion if cierre else None,
+            'observacion': other.observacion,
+        })
+        if len(eventos) >= limit:
+            break
+    return eventos
 
 
 def evaluar_reincidencia(ticket):
-    """Evalúa reincidencia operativa en ventana móvil de 30 días."""
-    inicio = now_colombia() - timedelta(days=30)
-    q = Ticket.query.filter(
+    """Clasifica reincidencia con ventana móvil de 30 días."""
+    base_fecha = ticket.fecha_apertura or now_colombia()
+    inicio = base_fecha - timedelta(days=30)
+    candidatos = Ticket.query.filter(
         Ticket.fecha_apertura >= inicio,
+        Ticket.fecha_apertura <= base_fecha + timedelta(seconds=1),
         Ticket.id != ticket.id
-    )
-
-    candidatos = q.all()
-    similares = []
-    motivos = []
-    macs_repetidas = set()
+    ).all()
+    similar_count = 1
     site_count = 1
-    dispositivo_count = 1
-
-    for otro in candidatos:
-        if _norm_text(ticket.site) and _norm_text(ticket.site) == _norm_text(otro.site) and _norm_text(ticket.torre) == _norm_text(otro.torre):
+    acc_edge_count = 1
+    repeated_users = 0
+    motivos = []
+    for other in candidatos:
+        score, reasons, common_macs = _similar_ticket(ticket, other)
+        if _same_or_empty(ticket.site, other.site) and _same_or_empty(ticket.torre, other.torre):
             site_count += 1
-
-        mismo_dispositivo = False
-        if ticket.acc_ip and otro.acc_ip and ticket.acc_ip == otro.acc_ip:
-            mismo_dispositivo = True
-        if ticket.edge_ip and otro.edge_ip and ticket.edge_ip == otro.edge_ip:
-            mismo_dispositivo = True
-        if _norm_text(ticket.acc_nombre) and _norm_text(ticket.acc_nombre) == _norm_text(otro.acc_nombre):
-            mismo_dispositivo = True
-        if _norm_text(ticket.edge_nombre) and _norm_text(ticket.edge_nombre) == _norm_text(otro.edge_nombre):
-            mismo_dispositivo = True
-        if mismo_dispositivo:
-            dispositivo_count += 1
-
-        score, razones, comunes = _similaridad_ticket(ticket, otro)
-        if score >= 5:
-            similares.append(otro)
-            motivos.extend(razones)
-            macs_repetidas.update(comunes)
-
-    eventos_similares = len(similares) + 1
-    ticket.evento_num = max(site_count, eventos_similares)
-
-    motivos_unicos = []
-    for m in motivos:
-        if m not in motivos_unicos:
-            motivos_unicos.append(m)
-
-    if site_count >= 3:
-        motivos_unicos.insert(0, f'{site_count} eventos del mismo site/torre en 30 días')
-    if dispositivo_count >= 3:
-        motivos_unicos.insert(0, f'{dispositivo_count} eventos del mismo ACC/EDGE en 30 días')
-    if len(macs_repetidas) >= 2:
-        motivos_unicos.insert(0, f'{len(macs_repetidas)} usuarios/MACs repetidos')
-    if ticket.afectados and ticket.afectados >= 10:
-        motivos_unicos.append('evento masivo por cantidad de afectados')
-
-    critico = (
-        eventos_similares >= 3 or
-        site_count >= 3 or
-        dispositivo_count >= 3 or
-        len(macs_repetidas) >= 2 or
-        ((ticket.afectados or 0) >= 10 and eventos_similares >= 2)
-    )
-    alerta = (
-        eventos_similares >= 2 or
-        site_count >= 2 or
-        dispositivo_count >= 2 or
-        len(macs_repetidas) >= 1 or
-        (ticket.afectados or 0) >= 10
-    )
-
-    if critico:
+        if (_same_or_empty(ticket.acc_nombre, other.acc_nombre) or _same_or_empty(ticket.acc_ip, other.acc_ip)
+            or _same_or_empty(ticket.edge_nombre, other.edge_nombre) or _same_or_empty(ticket.edge_ip, other.edge_ip)):
+            acc_edge_count += 1
+        repeated_users += common_macs
+        if score >= 3:
+            similar_count += 1
+            for r in reasons:
+                if r not in motivos:
+                    motivos.append(r)
+    ticket.evento_num = max(site_count, similar_count)
+    masivo = int(ticket.afectados or 0) >= 10
+    if similar_count >= 3 or acc_edge_count >= 3 or repeated_users >= 2 or (masivo and similar_count >= 2):
         ticket.semaforo = 'ROJO'
         ticket.es_reincidente = True
         ticket.criterio_reincidencia = 'CRITICO'
-    elif alerta:
+        base = f'{similar_count} incidencias similares/30 días'
+    elif similar_count >= 2 or site_count >= 2 or acc_edge_count >= 2 or repeated_users >= 1 or masivo:
         ticket.semaforo = 'AMARILLO'
         ticket.es_reincidente = True
         ticket.criterio_reincidencia = 'ALERTA'
+        base = f'{similar_count} incidencia(s) similar(es)/30 días'
     else:
         ticket.semaforo = 'VERDE'
         ticket.es_reincidente = False
         ticket.criterio_reincidencia = 'ESTABLE'
-        motivos_unicos = ['caso aislado: sin patrón repetitivo en últimos 30 días']
-
-    ticket.motivo_reincidencia = '; '.join(motivos_unicos[:6])
+        base = 'caso aislado: sin patrón repetitivo en últimos 30 días'
+    if masivo and 'evento masivo por cantidad de afectados' not in motivos:
+        motivos.append('evento masivo por cantidad de afectados')
+    if site_count >= 2 and 'repetición por site/torre' not in motivos:
+        motivos.append('repetición por site/torre')
+    if acc_edge_count >= 2 and 'repetición por ACC/EDGE' not in motivos:
+        motivos.append('repetición por ACC/EDGE')
+    if repeated_users:
+        motivos.append(f'{repeated_users} usuario(s)/MAC repetido(s)')
+    ticket.motivo_reincidencia = f"{ticket.criterio_reincidencia} | {base}"
+    if motivos:
+        ticket.motivo_reincidencia += ' | ' + '; '.join(motivos[:8])
 
 
 def _periodo_inicio_fin(mes_str):
@@ -512,6 +507,8 @@ def parse_slack_message(texto):
             mmac = re.search(r'([0-9a-f]{2}(?::[0-9a-f]{2}){5})', clean, re.I)
             if mmac:
                 apt = re.search(r'APT\s*([A-Za-z0-9\-]+)', clean, re.I)
+                if not apt:
+                    apt = re.search(r'(?:^|\s)([A-Za-z0-9\-]{2,8})\s*$', clean.strip(), re.I)
                 data['macs'].append({'mac': mmac.group(1), 'apt': apt.group(1) if apt else None})
             else:
                 data['macs'].append({'mac': clean, 'apt': None})
@@ -702,7 +699,14 @@ def parse_slack_preview():
 def get_tickets():
     q = Ticket.query
     if session['rol'] == 'tecnico':
-        q = q.filter(Ticket.tecnico_id == session['tecnico_id'])
+        inicio_hoy = now_colombia().replace(hour=0, minute=0, second=0, microsecond=0)
+        fin_hoy = inicio_hoy + timedelta(days=1)
+        q = q.filter(Ticket.tecnico_id == session['tecnico_id']).filter(
+            db.or_(
+                db.and_(Ticket.fecha_apertura >= inicio_hoy, Ticket.fecha_apertura < fin_hoy),
+                Ticket.estado.in_(['EN_TRANSITO', 'EN_SITIO'])
+            )
+        )
     elif request.args.get('tecnico_id'):
         q = q.filter(Ticket.tecnico_id == int(request.args['tecnico_id']))
     if request.args.get('desde'):
@@ -742,7 +746,11 @@ def sync_all_tickets_to_sheets():
     failed = []
 
     for t in tickets:
-        ok, msg = sync_ticket_to_sheets(t, 'manual_sync')
+        evaluar_reincidencia(t)
+        result = sync_ticket_to_sheets(t, 'manual_sync')
+        if not isinstance(result, tuple):
+            result = (False, 'sync_ticket_to_sheets no retornó estado válido')
+        ok, msg = result
         if ok:
             ok_count += 1
         else:
@@ -773,7 +781,6 @@ def sync_all_tickets_to_sheets():
 @app.route('/api/reincidencias/recalcular', methods=['POST'])
 @require_login(['coordinador'])
 def recalcular_reincidencias():
-    """Recalcula semáforo, criterio y motivo de reincidencia para tickets existentes."""
     data = request.json or {}
     q = Ticket.query
     desde = data.get('desde')
@@ -782,71 +789,41 @@ def recalcular_reincidencias():
         q = q.filter(Ticket.fecha_apertura >= datetime.fromisoformat(desde))
     if hasta:
         q = q.filter(Ticket.fecha_apertura < datetime.fromisoformat(hasta) + timedelta(days=1))
-
     tickets = q.order_by(Ticket.fecha_apertura.asc()).all()
     for t in tickets:
         evaluar_reincidencia(t)
-
-    log_actividad(f"Recalculo de reincidencias: {len(tickets)} tickets", 'assign', None, session.get('nombre'))
+    log_actividad(f'Recálculo de reincidencias: {len(tickets)} tickets', 'assign', None, session.get('nombre'))
     db.session.commit()
-
-    if data.get('sync_sheets'):
-        for t in tickets:
-            sync_ticket_to_sheets(t, 'reincidence_recalculated')
-
-    return jsonify({
-        'ok': True,
-        'recalculados': len(tickets),
-        'criticos': sum(1 for t in tickets if t.semaforo == 'ROJO'),
-        'alerta': sum(1 for t in tickets if t.semaforo == 'AMARILLO'),
-        'estables': sum(1 for t in tickets if t.semaforo == 'VERDE'),
-    })
+    return jsonify({'ok': True, 'total': len(tickets)})
 
 
-@app.route('/api/tickets/<int:tid>/historial-contexto', methods=['GET'])
+@app.route('/api/tickets/<int:tid>/cancelar', methods=['POST'])
+@require_login(['coordinador'])
+def cancelar_ticket(tid):
+    t = Ticket.query.get_or_404(tid)
+    data = request.json or {}
+    motivo = (data.get('motivo') or '').strip()
+    if len(motivo) < 10:
+        return jsonify({'error': 'El motivo de cancelación debe tener mínimo 10 caracteres'}), 400
+    if t.estado in ['CERRADO', 'ESCALADO']:
+        return jsonify({'error': 'No se puede cancelar un ticket cerrado o escalado'}), 400
+    t.estado = 'CANCELADO'
+    t.fecha_cancelacion = now_colombia()
+    t.motivo_cancelacion = motivo
+    t.cancelado_por = session.get('nombre')
+    log_actividad(f'Ticket #{t.slack_num or t.id} cancelado — {motivo}', 'alert', t.id, session.get('nombre'))
+    db.session.commit()
+    sync_ticket_to_sheets(t, 'cancelled')
+    return jsonify(t.to_dict())
+
+
+@app.route('/api/tickets/<int:tid>/historial-anonimo', methods=['GET'])
 @require_login()
-def historial_contexto_ticket(tid):
-    """Devuelve historial operativo similar sin exponer nombres de técnicos anteriores."""
+def historial_anonimo_ticket(tid):
     t = Ticket.query.get_or_404(tid)
     if session['rol'] == 'tecnico' and t.tecnico_id != session['tecnico_id']:
         abort(403)
-
-    inicio = now_colombia() - timedelta(days=60)
-    previos = []
-    for otro in Ticket.query.filter(Ticket.fecha_apertura >= inicio, Ticket.id != t.id).order_by(Ticket.fecha_apertura.desc()).all():
-        score, razones, comunes = _similaridad_ticket(t, otro)
-        if score < 5:
-            continue
-        cierre = otro.cierre
-        previos.append({
-            'ticket': otro.slack_num or otro.id,
-            'fecha': otro.fecha_apertura.isoformat() if otro.fecha_apertura else None,
-            'estado': otro.estado,
-            'site': otro.site,
-            'torre': otro.torre,
-            'tipo': otro.tipo,
-            'afectados': otro.afectados,
-            'razones': list(dict.fromkeys(razones)),
-            'observacion': otro.observacion,
-            'acciones': cierre.to_dict().get('acciones', []) if cierre else [],
-            'causa_raiz': cierre.causa_raiz if cierre else None,
-            'clasificacion': cierre.clasificacion if cierre else None,
-            'estado_acc': cierre.estado_acc if cierre else None,
-            'estado_edge': cierre.estado_edge if cierre else None,
-            'estado_switch': cierre.estado_switch if cierre else None,
-            'solucion': cierre.solucion if cierre else None,
-            'escalamiento': cierre.escalamiento if cierre else None,
-            'recomendacion': cierre.recomendacion if cierre else None,
-        })
-        if len(previos) >= 8:
-            break
-
-    return jsonify({
-        'ticket_id': t.id,
-        'criterio_reincidencia': t.criterio_reincidencia,
-        'motivo_reincidencia': t.motivo_reincidencia,
-        'historial': previos,
-    })
+    return jsonify(_historial_operativo_anonimo(t, limit=10))
 
 
 @app.route('/api/tickets', methods=['POST'])
@@ -975,13 +952,11 @@ def cerrar_ticket(tid):
     )
     db.session.add(cierre)
     t.estado = data['estado_final']; t.fecha_cierre = now_colombia()
-    evaluar_reincidencia(t)
     if 'repetitiva' in data['clasificacion'].lower():
         t.es_reincidente = True
-        t.semaforo = 'AMARILLO' if t.semaforo == 'VERDE' else t.semaforo
-        t.criterio_reincidencia = 'ALERTA' if t.criterio_reincidencia == 'ESTABLE' else t.criterio_reincidencia
-        extra = 'clasificación técnica marcada como repetitiva'
-        t.motivo_reincidencia = (t.motivo_reincidencia + '; ' + extra) if t.motivo_reincidencia else extra
+        t.criterio_reincidencia = 'ALERTA' if t.semaforo != 'ROJO' else 'CRITICO'
+        t.motivo_reincidencia = (t.motivo_reincidencia or '') + ' | técnico clasificó como falla repetitiva'
+    evaluar_reincidencia(t)
     log_actividad(f"Ticket #{t.slack_num or t.id} {data['estado_final'].lower()} — {t.site} | {data['causa_raiz']}",
                   'closed' if data['estado_final'] == 'CERRADO' else 'alert', t.id, session.get('nombre'))
     db.session.commit()
@@ -1685,6 +1660,15 @@ def ensure_schema_updates():
             )
             conn.exec_driver_sql(
                 "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS motivo_reincidencia TEXT"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS fecha_cancelacion TIMESTAMP"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS motivo_cancelacion TEXT"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS cancelado_por VARCHAR(80)"
             )
     except Exception as e:
         print(f"[WARN] No se pudo actualizar schema: {e}")

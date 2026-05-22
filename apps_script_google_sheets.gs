@@ -1,15 +1,9 @@
 /**
  * Google Apps Script para guardar/actualizar tickets en Google Sheets.
  *
- * Pasos:
- * 1. Crea un Google Sheet.
- * 2. Extensiones -> Apps Script.
- * 3. Pega este archivo completo.
- * 4. Deploy -> New deployment -> Web app.
- * 5. Execute as: Me.
- * 6. Who has access: Anyone with the link.
- * 7. Copia la URL /exec y guárdala en Render como:
- *    GOOGLE_SHEETS_WEBHOOK_URL=https://script.google.com/macros/s/XXXXX/exec
+ * Pegar este archivo en Google Sheets -> Extensiones -> Apps Script.
+ * Luego publicar como Web App y guardar la URL /exec en Render como
+ * GOOGLE_SHEETS_WEBHOOK_URL.
  */
 
 const SHEET_NAME = 'Tickets';
@@ -76,13 +70,20 @@ function doPost(e) {
     }
 
     const row = buildRow_(ticket, action, syncedAt);
-    const rowIndex = findTicketRow_(sheet, ticket.id);
+    if (row.length !== HEADERS.length) {
+      return json_({ ok: false, error: `Estructura inválida: HEADERS=${HEADERS.length}, ROW=${row.length}` });
+    }
 
+    let rowIndex = findTicketRow_(sheet, ticket.id);
     if (rowIndex) {
       sheet.getRange(rowIndex, 1, 1, HEADERS.length).setValues([row]);
     } else {
       sheet.appendRow(row);
+      rowIndex = sheet.getLastRow();
     }
+
+    cleanupDuplicateRows_(sheet, ticket.id, rowIndex);
+    formatSheet_(sheet);
 
     return json_({ ok: true, action, ticket_id: ticket.id, updated: Boolean(rowIndex) });
   } catch (err) {
@@ -122,12 +123,25 @@ function findTicketRow_(sheet, ticketId) {
   return null;
 }
 
+function cleanupDuplicateRows_(sheet, ticketId, keepRow) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 3) return;
+  const id = String(ticketId);
+  const values = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = values.length - 1; i >= 0; i--) {
+    const row = i + 2;
+    if (row !== keepRow && String(values[i][0]) === id) {
+      sheet.deleteRow(row);
+      if (row < keepRow) keepRow -= 1;
+    }
+  }
+}
 
 function formatDateOnly_(value) {
   if (!value) return '';
   const d = new Date(value);
   if (isNaN(d.getTime())) return value;
-  return Utilities.formatDate(d, 'America/Bogota', 'dd/MM/yyyy');
+  return Utilities.formatDate(d, 'America/Bogota', 'yyyy-MM-dd');
 }
 
 function formatTimeOnly_(value) {
@@ -139,7 +153,7 @@ function formatTimeOnly_(value) {
 
 function buildRow_(t, action, syncedAt) {
   const cierre = t.cierre || {};
-  return [
+  const row = [
     t.id || '',
     t.slack_num || '',
     action || '',
@@ -185,6 +199,16 @@ function buildRow_(t, action, syncedAt) {
     cierre.recomendacion || '',
     t.mttr_minutos || ''
   ];
+  return row;
+}
+
+function formatSheet_(sheet) {
+  const lastCol = HEADERS.length;
+  sheet.getRange(1, 1, 1, lastCol).setFontWeight('bold');
+  sheet.getRange(1, 1, 1, lastCol).setBackground('#d9ead3');
+  sheet.setFrozenRows(1);
+  const filter = sheet.getFilter();
+  if (!filter) sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 1), lastCol).createFilter();
 }
 
 function json_(obj) {
