@@ -201,7 +201,7 @@ Usuarios afectados:
     <label>Hasta</label><input type="date" id="rc-h" onchange="applyF('rc')">
   </div>
   <div class="alert-strip amarillo" style="justify-content:space-between;gap:10px;flex-wrap:wrap">
-    <span>⚙️ <strong>Motor activo:</strong>&nbsp;🔴 CRÍTICO: ≥3 eventos/30d, ó ≥2 MACs repetidos, ó ≥50 afectados evento único&nbsp;|&nbsp;🟡 ALERTA: ≥2 eventos/30d, ó ≥30 afectados evento único&nbsp;|&nbsp;🟢 ESTABLE: primer evento &lt;30 afectados — Haz clic en un site para ver el detalle</span>
+    <span>⚙️ <strong>Motor activo:</strong>&nbsp;🔴 CRÍTICO: ≥3 eventos/30d, ó ≥2 MACs repetidos, ó ≥50 afectados evento único | 🟡 ALERTA: ≥2 eventos/30d, ó ≥30 afectados evento único | 🟢 ESTABLE: primer evento &lt;30 afectados — Haz clic en un site para ver el detalle</span>
     <button class="btn btn-a btn-sm" onclick="recalcularCriterios()">🔄 Recalcular criterios</button>
   </div>
   <div class="three-col" id="rc-panels"></div>
@@ -1042,28 +1042,25 @@ function mostrarEventosReincidencia(encodedName) {
   const panel = document.getElementById('rc-detail');
   if (!panel) return;
 
-  // ── Calcular resumen del site ──────────────────────────────────────────────
   const totalAfect = tickets.reduce((s,t) => s + (t.afectados || 0), 0);
-  const maxAfect   = Math.max(...tickets.map(t => t.afectados || 0));
+  const maxAfect   = tickets.length ? Math.max(...tickets.map(t => t.afectados || 0)) : 0;
   const abiertos   = tickets.filter(t => t.estado !== 'CERRADO').length;
-  // El criterio más grave del site
   const rankOf = t => t.semaforo === 'ROJO' ? 3 : t.semaforo === 'AMARILLO' ? 2 : 1;
-  const worst  = tickets.reduce((a,b) => rankOf(b) > rankOf(a) ? b : a, tickets[0] || {});
+  const worst  = tickets.length ? tickets.reduce((a,b) => rankOf(b) > rankOf(a) ? b : a, tickets[0]) : {};
   const crit   = worst.criterio_reincidencia || worst.semaforo || 'ESTABLE';
   const motivo = worst.motivo_reincidencia || '';
   const semC   = {ROJO:'var(--rj2)',AMARILLO:'var(--am2)',VERDE:'var(--vd2)'}[worst.semaforo] || 'var(--vd2)';
   const semI   = {ROJO:'🔴',AMARILLO:'🟡',VERDE:'🟢'}[worst.semaforo] || '🟢';
 
-  // ── Explicación legible del WHY ────────────────────────────────────────────
   const razones = [];
   if (tickets.length >= 3) razones.push(`<strong>${tickets.length} eventos</strong> en los últimos 30 días`);
   else if (tickets.length === 2) razones.push(`<strong>2 eventos</strong> registrados en 30 días (reincidencia)`);
-  if (maxAfect >= 50) razones.push(`evento con <strong>${maxAfect} afectados</strong> (≥50 → crítico automático)`);
-  else if (maxAfect >= 30) razones.push(`evento con <strong>${maxAfect} afectados</strong> (≥30 → alerta masiva)`);
+  if (maxAfect >= 50) razones.push(`evento con <strong>${maxAfect} afectados</strong> ≥50 → crítico automático`);
+  else if (maxAfect >= 30) razones.push(`evento con <strong>${maxAfect} afectados</strong> ≥30 → alerta masiva`);
   if (motivo) razones.push(esc(motivo));
 
   const whyHtml = razones.length
-    ? `<div style="background:rgba(0,0,0,.25);border-left:3px solid ${semC};padding:8px 12px;border-radius:4px;margin:8px 0;font-size:12px;line-height:1.6">
+    ? `<div style="background:rgba(0,0,0,.25);border-left:3px solid ${semC};padding:8px 12px;border-radius:4px;margin:8px 0;font-size:12px;line-height:1.7">
         <strong style="color:${semC}">${semI} POR QUÉ está en ${crit}:</strong><br>${razones.join('<br>')}
        </div>`
     : '';
@@ -1074,7 +1071,6 @@ function mostrarEventosReincidencia(encodedName) {
       <h3>🔎 ${esc(name)}</h3>
       <button class="btn btn-g btn-sm" onclick="document.getElementById('rc-detail').style.display='none'">✕ Cerrar</button>
     </div>
-    <!-- Tarjeta resumen del site -->
     <div style="display:flex;gap:12px;flex-wrap:wrap;padding:10px 0 4px">
       <div style="background:var(--bg2);border-radius:6px;padding:10px 16px;min-width:110px;text-align:center">
         <div style="font-size:22px;font-weight:700;color:var(--az2)">${tickets.length}</div>
@@ -1094,7 +1090,6 @@ function mostrarEventosReincidencia(encodedName) {
       </div>
     </div>
     ${whyHtml}
-    <!-- Tabla de eventos ──────────────────────────────────────── -->
     <div class="tw"><table><thead><tr>
       <th>Ticket</th><th>Fecha</th><th>Tipo</th><th style="text-align:center">Afect.</th>
       <th>ACC / Edge</th><th>Criterio y motivo</th><th>Técnico</th><th>Estado</th>
@@ -1584,4 +1579,100 @@ function abrirLimpiarMes(mes, label, total) {
   _mesPendienteLimpiar = mes;
   document.getElementById('confirm-limpiar-msg').innerHTML =
     `Vas a eliminar <strong>${total} tickets</strong> del mes <strong>${label}</strong>.<br><br>
-    ✅ El archivo JSON está generado y puede descargarse en cualquier
+    ✅ El archivo JSON está generado y puede descargarse en cualquier momento.<br>
+    ⚠️ Esta acción es <strong>irreversible</strong> y queda en auditoría.`;
+  document.getElementById('m-confirm-limpiar').classList.add('on');
+}
+
+async function confirmarLimpiarMes() {
+  if (!_mesPendienteLimpiar) return;
+  document.getElementById('m-confirm-limpiar').classList.remove('on');
+  try {
+    const r = await api('/api/historico/limpiar', {
+      method: 'DELETE',
+      body: { mes: _mesPendienteLimpiar, confirmado: true }
+    });
+    showToast(`🗑 ${r.eliminados} tickets del mes ${_mesPendienteLimpiar} eliminados`, 'warn');
+    _mesPendienteLimpiar = null;
+    loadHistorico();
+  } catch(e) { showToast('Error: ' + e.message, 'err'); }
+}
+
+// ── KPIs por técnico ──────────────────────────────────
+async function loadKpisPorTecnico() {
+  const params = buildQueryParams();
+  const wrap = document.getElementById('kpis-tecnico-wrap');
+  if (!wrap) return;
+  try {
+    const data = await api('/api/kpis/por-tecnico?' + params);
+    if (!data.length) { wrap.innerHTML = '<p class="empty">Sin datos en el período seleccionado.</p>'; return; }
+    wrap.innerHTML = `
+      <table class="tec-kpi-table">
+        <thead><tr><th>#</th><th>Técnico</th><th>Total</th><th>Cerrados</th><th>FCR %</th><th>MTTR prom.</th><th>Reinc.</th><th>Afectados</th></tr></thead>
+        <tbody>
+          ${data.map((t, i) => {
+            const fCol = t.fcr >= 80 ? 'var(--vd2)' : t.fcr >= 70 ? 'var(--am2)' : 'var(--rj2)';
+            const mttrStr = t.mttr ? `${Math.floor(t.mttr/60)}h ${t.mttr%60}m` : '—';
+            return `<tr>
+              <td style="color:#8b949e">${i+1}</td>
+              <td><strong>${t.nombre}</strong></td>
+              <td style="font-weight:700">${t.total}</td>
+              <td>${t.cerrados}</td>
+              <td style="color:${fCol};font-weight:700">${t.fcr}%</td>
+              <td>${mttrStr}</td>
+              <td>${t.reincidentes > 0 ? `<span style="color:var(--rj2)">${t.reincidentes}</span>` : '0'}</td>
+              <td>${t.afectados}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+  } catch(e) { wrap.innerHTML = `<p class="empty">Error: ${e.message}</p>`; }
+}
+
+// ── Auditoría ─────────────────────────────────────────
+async function loadAuditoria() {
+  try {
+    const acts = await api('/api/actividad');
+    const tbody = document.getElementById('auditoria-tbody');
+    if (!acts.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">Sin actividad registrada.</td></tr>';
+      return;
+    }
+    const tipoColors = { alert: 'var(--rj2)', closed: 'var(--vd2)', new: 'var(--az2)', assign: 'var(--am2)' };
+    tbody.innerHTML = acts.map(a => {
+      const d = new Date(a.fecha);
+      const fecha = d.toLocaleDateString('es-CO') + ' ' + d.toLocaleTimeString('es-CO', {hour:'2-digit', minute:'2-digit'});
+      const color = tipoColors[a.tipo] || '#8b949e';
+      return `<tr>
+        <td style="font-size:11px;color:#8b949e;white-space:nowrap">${fecha}</td>
+        <td>${a.texto}</td>
+        <td style="font-size:11px">${a.usuario || '—'}</td>
+        <td style="font-size:11px;text-align:center;color:${color}">${a.tipo?.toUpperCase() || ''}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) { console.error('Auditoría error:', e); }
+}
+
+// ── Cerrar modales con click afuera ───────────────────
+['m-confirm-del', 'm-confirm-limpiar'].forEach(id => {
+  document.getElementById(id)?.addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('on');
+  });
+});
+
+// ── Inicialización extendida ──────────────────────────
+const _originalInit = init;
+document.addEventListener('DOMContentLoaded', () => {
+  // Inyectar barra de exportación
+  setTimeout(injectExportBar, 500);
+
+  // Exponer filtros globalmente para que exportar los use
+  const _origApplyF = window.applyF;
+  if (_origApplyF) {
+    window.applyF = function(ns) {
+      _origApplyF(ns);
+      window._F = window.F || {};
+    };
+  }
+});
+</script>
