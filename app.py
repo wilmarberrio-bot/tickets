@@ -78,7 +78,7 @@ class Tecnico(db.Model):
         ).count()
         en_curso = Ticket.query.filter(
             Ticket.tecnico_id == self.id,
-            Ticket.estado.in_(['ASIGNADO', 'EN_TRANSITO', 'EN_SITIO'])
+            Ticket.estado.in_(['EN_TRANSITO', 'EN_SITIO'])
         ).count()
         return {
             'id': self.id, 'nombre': self.nombre, 'zona': self.zona,
@@ -188,11 +188,8 @@ class Cierre(db.Model):
     escalamiento    = db.Column(db.String(80))
     riesgo          = db.Column(db.Boolean, default=False)
     desc_riesgo     = db.Column(db.Text)
-    recomendacion       = db.Column(db.Text)
-    pruebas             = db.Column(db.Text)   # pruebas ejecutadas
-    hallazgos           = db.Column(db.Text)   # hallazgos encontrados
-    soluciones_desc     = db.Column(db.Text)   # soluciones descartadas
-    creado              = db.Column(db.DateTime, default=now_colombia)
+    recomendacion   = db.Column(db.Text)
+    creado          = db.Column(db.DateTime, default=now_colombia)
 
     def to_dict(self):
         tec = Tecnico.query.get(self.tecnico_id) if self.tecnico_id else None
@@ -210,9 +207,6 @@ class Cierre(db.Model):
             'riesgo': self.riesgo,
             'desc_riesgo': self.desc_riesgo,
             'recomendacion': self.recomendacion,
-            'pruebas': self.pruebas,
-            'hallazgos': self.hallazgos,
-            'soluciones_desc': self.soluciones_desc,
             'tecnico_id': self.tecnico_id,
             'tecnico_nombre': tec.nombre if tec else None,
             'creado': self.creado.isoformat() if self.creado else None,
@@ -353,48 +347,20 @@ def _similar_affectation(a, b):
 
 
 def _similar_ticket(base, other):
-    """Calcula similitud entre dos tickets.
-
-    Regla de negocio: para ser considerado reiterativo DEBE coincidir
-    site + torre + (ACC o Edge). Sin esa combinacion base, el score
-    parte en 0 y no se clasifica como reincidencia del mismo sitio.
-    """
     score = 0
     reasons = []
-
-    mismo_site_torre = (
-        _same_or_empty(base.site, other.site) and
-        _same_or_empty(base.torre, other.torre)
-    )
-    mismo_acc = (
-        _same_or_empty(base.acc_nombre, other.acc_nombre) or
-        _same_or_empty(base.acc_ip, other.acc_ip)
-    )
-    mismo_edge = (
-        _same_or_empty(base.edge_nombre, other.edge_nombre) or
-        _same_or_empty(base.edge_ip, other.edge_ip)
-    )
-
-    # Condicion base obligatoria: mismo site/torre Y (mismo ACC o mismo Edge)
-    # Sin esto no es el mismo sitio operativo — no suma score
-    if not (mismo_site_torre and (mismo_acc or mismo_edge)):
-        return 0, [], 0
-
-    # A partir de aqui ya sabemos que es el mismo nodo fisico
-    score += 3  # coincidencia site + torre + ACC/Edge
-    reasons.append('mismo site/torre/nodo')
-    if mismo_acc:
-        reasons.append('mismo ACC')
-    if mismo_edge:
-        reasons.append('mismo Edge')
-
-    # Criterios adicionales que aumentan la certeza
+    if _same_or_empty(base.site, other.site) and _same_or_empty(base.torre, other.torre):
+        score += 2; reasons.append('mismo site/torre')
+    if _same_or_empty(base.acc_nombre, other.acc_nombre) or _same_or_empty(base.acc_ip, other.acc_ip):
+        score += 2; reasons.append('mismo ACC')
+    if _same_or_empty(base.edge_nombre, other.edge_nombre) or _same_or_empty(base.edge_ip, other.edge_ip):
+        score += 2; reasons.append('mismo EDGE')
     if _same_or_empty(base.modelo, other.modelo):
         score += 1; reasons.append('mismo modelo')
     if _same_or_empty(base.tipo, other.tipo):
         score += 1; reasons.append('mismo tipo de problema')
     if _similar_affectation(base.afectados, other.afectados):
-        score += 1; reasons.append('afectacion similar')
+        score += 1; reasons.append('afectación similar')
     common_macs = _ticket_macs(base).intersection(_ticket_macs(other))
     if common_macs:
         score += 3
@@ -402,20 +368,17 @@ def _similar_ticket(base, other):
     return score, reasons, len(common_macs)
 
 
-def _historial_operativo_anonimo(ticket, limit=10):
-    """Historial tecnico anonimo: contexto operativo SIN nombres de tecnicos.
-    Ventana de 180 dias para capturar patrones historicos reales.
-    """
-    inicio = (ticket.fecha_apertura or now_colombia()) - timedelta(days=180)
+def _historial_operativo_anonimo(ticket, limit=5):
+    """Historial para continuidad técnica sin mostrar nombres de técnicos anteriores."""
+    inicio = (ticket.fecha_apertura or now_colombia()) - timedelta(days=30)
     candidatos = Ticket.query.filter(
         Ticket.id != ticket.id,
         Ticket.fecha_apertura >= inicio
-    ).order_by(Ticket.fecha_apertura.desc()).limit(200).all()
+    ).order_by(Ticket.fecha_apertura.desc()).limit(120).all()
     eventos = []
     for other in candidatos:
         score, reasons, common_macs = _similar_ticket(ticket, other)
-        # score=0 = distinto site/torre/nodo — no es el mismo caso
-        if score == 0:
+        if score < 3:
             continue
         cierre = other.cierre
         try:
@@ -423,111 +386,25 @@ def _historial_operativo_anonimo(ticket, limit=10):
         except Exception:
             acciones = []
         eventos.append({
-            'ticket_ref': other.slack_num or str(other.id),
+            'ticket': other.slack_num or other.id,
             'fecha': other.fecha_apertura.isoformat() if other.fecha_apertura else None,
             'estado': other.estado,
             'site': other.site,
             'torre': other.torre,
-            'acc_nombre': other.acc_nombre,
-            'acc_ip': other.acc_ip,
-            'edge_nombre': other.edge_nombre,
-            'edge_ip': other.edge_ip,
-            'modelo': other.modelo,
             'tipo': other.tipo,
             'afectados': other.afectados,
-            'observacion': other.observacion,
-            'similitud': reasons,
-            # Datos de cierre — contexto tecnico
-            'causa_raiz': cierre.causa_raiz if cierre else None,
-            'clasificacion': cierre.clasificacion if cierre else None,
-            'acciones': acciones,
-            'estado_acc': cierre.estado_acc if cierre else None,
-            'estado_edge': cierre.estado_edge if cierre else None,
-            'estado_switch': cierre.estado_switch if cierre else None,
-            'potencia_dbm': cierre.potencia_dbm if cierre else None,
-            'solucion': cierre.solucion if cierre else None,
-            'pruebas': cierre.pruebas if cierre else None,
-            'hallazgos': cierre.hallazgos if cierre else None,
-            'soluciones_desc': cierre.soluciones_desc if cierre else None,
-            'escalamiento': cierre.escalamiento if cierre else None,
-            'recomendacion': cierre.recomendacion if cierre else None,
-            'riesgo': cierre.riesgo if cierre else False,
-            'desc_riesgo': cierre.desc_riesgo if cierre else None,
-            'mttr_minutos': other.mttr_minutos,
-            # SIN tecnico_nombre — intencionalmente anonimo
-        })
-        if len(eventos) >= limit:
-            break
-    return eventos
-
-
-def _historial_completo_coordinador(ticket, limit=20):
-    """Historial COMPLETO con trazabilidad total para coordinador/supervisor.
-    Incluye tecnicos, fechas, tiempo entre incidencias, comportamiento del site.
-    """
-    inicio = (ticket.fecha_apertura or now_colombia()) - timedelta(days=365)
-    candidatos = Ticket.query.filter(
-        Ticket.id != ticket.id,
-        Ticket.fecha_apertura >= inicio
-    ).order_by(Ticket.fecha_apertura.desc()).limit(300).all()
-    eventos = []
-    for other in candidatos:
-        score, reasons, common_macs = _similar_ticket(ticket, other)
-        # Solo el mismo nodo fisico (site+torre+ACC/Edge obligatorio)
-        if score == 0:
-            continue
-        cierre = other.cierre
-        try:
-            acciones = json.loads(cierre.acciones) if cierre and cierre.acciones else []
-        except Exception:
-            acciones = []
-        # Tiempo entre este evento y el ticket actual
-        delta_dias = None
-        if other.fecha_apertura and ticket.fecha_apertura:
-            delta_dias = abs((ticket.fecha_apertura - other.fecha_apertura).days)
-        # Tecnicos
-        tec_asignado = other.tecnico_rel.nombre if other.tecnico_rel else None
-        cierre_tec = Tecnico.query.get(cierre.tecnico_id) if (cierre and cierre.tecnico_id) else None
-        tec_cierre = cierre_tec.nombre if cierre_tec else tec_asignado
-        eventos.append({
-            'ticket_ref': other.slack_num or str(other.id),
-            'fecha_apertura': other.fecha_apertura.isoformat() if other.fecha_apertura else None,
-            'fecha_cierre': other.fecha_cierre.isoformat() if other.fecha_cierre else None,
-            'estado': other.estado,
-            'delta_dias': delta_dias,
-            'site': other.site,
-            'torre': other.torre,
-            'acc_nombre': other.acc_nombre,
-            'acc_ip': other.acc_ip,
-            'edge_nombre': other.edge_nombre,
-            'edge_ip': other.edge_ip,
-            'modelo': other.modelo,
-            'tipo': other.tipo,
-            'afectados': other.afectados,
-            'observacion': other.observacion,
-            'similitud': reasons,
-            'score_similitud': score,
-            # Trazabilidad de tecnicos — SOLO para coordinador
-            'tecnico_asignado': tec_asignado,
-            'tecnico_cierre': tec_cierre,
-            # Datos de cierre completos
-            'causa_raiz': cierre.causa_raiz if cierre else None,
-            'clasificacion': cierre.clasificacion if cierre else None,
-            'acciones': acciones,
-            'estado_acc': cierre.estado_acc if cierre else None,
-            'estado_edge': cierre.estado_edge if cierre else None,
-            'estado_switch': cierre.estado_switch if cierre else None,
-            'potencia_dbm': cierre.potencia_dbm if cierre else None,
-            'solucion': cierre.solucion if cierre else None,
-            'pruebas': cierre.pruebas if cierre else None,
-            'hallazgos': cierre.hallazgos if cierre else None,
-            'soluciones_desc': cierre.soluciones_desc if cierre else None,
-            'escalamiento': cierre.escalamiento if cierre else None,
-            'recomendacion': cierre.recomendacion if cierre else None,
-            'riesgo': cierre.riesgo if cierre else False,
-            'desc_riesgo': cierre.desc_riesgo if cierre else None,
-            'mttr_minutos': other.mttr_minutos,
             'criterio': other.criterio_reincidencia or other.semaforo,
+            'motivo': other.motivo_reincidencia or '; '.join(reasons),
+            'causa_raiz': cierre.causa_raiz if cierre else None,
+            'clasificacion': cierre.clasificacion if cierre else None,
+            'acciones': acciones,
+            'estado_acc': cierre.estado_acc if cierre else None,
+            'estado_edge': cierre.estado_edge if cierre else None,
+            'estado_switch': cierre.estado_switch if cierre else None,
+            'solucion': cierre.solucion if cierre else None,
+            'escalamiento': cierre.escalamiento if cierre else None,
+            'recomendacion': cierre.recomendacion if cierre else None,
+            'observacion': other.observacion,
         })
         if len(eventos) >= limit:
             break
@@ -550,81 +427,45 @@ def evaluar_reincidencia(ticket):
     motivos = []
     for other in candidatos:
         score, reasons, common_macs = _similar_ticket(ticket, other)
-        # score=0 significa que NO comparte site+torre+ACC/Edge → ignorar
-        if score == 0:
-            continue
-        # Site+torre ya esta garantizado por _similar_ticket (score >= 3)
-        site_count += 1
-        # ACC o Edge tambien garantizado — contar adicionalmente para umbrales
-        if (_same_or_empty(ticket.acc_nombre, other.acc_nombre) or
-                _same_or_empty(ticket.acc_ip, other.acc_ip) or
-                _same_or_empty(ticket.edge_nombre, other.edge_nombre) or
-                _same_or_empty(ticket.edge_ip, other.edge_ip)):
+        if _same_or_empty(ticket.site, other.site) and _same_or_empty(ticket.torre, other.torre):
+            site_count += 1
+        if (_same_or_empty(ticket.acc_nombre, other.acc_nombre) or _same_or_empty(ticket.acc_ip, other.acc_ip)
+            or _same_or_empty(ticket.edge_nombre, other.edge_nombre) or _same_or_empty(ticket.edge_ip, other.edge_ip)):
             acc_edge_count += 1
         repeated_users += common_macs
-        similar_count += 1
-        for r in reasons:
-            if r not in motivos:
-                motivos.append(r)
+        if score >= 3:
+            similar_count += 1
+            for r in reasons:
+                if r not in motivos:
+                    motivos.append(r)
     ticket.evento_num = max(site_count, similar_count)
-    afect = int(ticket.afectados or 0)
-    # Umbrales: 30+ afectados = masivo (ALERTA); 50+ = critico por si solo
-    masivo      = afect >= 30
-    masivo_crit = afect >= 50
-
-    if afect > 0:
-        motivos.append(f'{afect} usuarios afectados')
-
-    if masivo_crit or similar_count >= 3 or acc_edge_count >= 3 or repeated_users >= 2 \
-            or (masivo and similar_count >= 2):
+    masivo = int(ticket.afectados or 0) >= 10
+    if similar_count >= 3 or acc_edge_count >= 3 or repeated_users >= 2 or (masivo and similar_count >= 2):
         ticket.semaforo = 'ROJO'
         ticket.es_reincidente = True
         ticket.criterio_reincidencia = 'CRITICO'
-        razones = []
-        if masivo_crit:
-            razones.append(f'evento masivo: {afect} afectados (umbral 50)')
-        if similar_count >= 3:
-            razones.append(f'{similar_count} eventos similares en 30 dias')
-        if acc_edge_count >= 3:
-            razones.append(f'{acc_edge_count} fallas en mismo ACC/EDGE')
-        if repeated_users >= 2:
-            razones.append(f'{repeated_users} usuarios/MACs repetidos')
-        if masivo and similar_count >= 2:
-            razones.append(f'{afect} afectados + {similar_count} repeticiones')
-        base = ' | '.join(razones) if razones else f'{similar_count} eventos similares/30 dias'
-    elif similar_count >= 2 or site_count >= 2 or acc_edge_count >= 2 \
-            or repeated_users >= 1 or masivo:
+        base = f'{similar_count} incidencias similares/30 días'
+    elif similar_count >= 2 or site_count >= 2 or acc_edge_count >= 2 or repeated_users >= 1 or masivo:
         ticket.semaforo = 'AMARILLO'
         ticket.es_reincidente = True
         ticket.criterio_reincidencia = 'ALERTA'
-        razones = []
-        if masivo and similar_count < 2:
-            razones.append(f'evento unico con {afect} afectados (umbral 30)')
-        if similar_count >= 2:
-            razones.append(f'{similar_count} eventos similares en 30 dias')
-        if site_count >= 2:
-            razones.append(f'{site_count} eventos en mismo site/torre')
-        if acc_edge_count >= 2:
-            razones.append(f'{acc_edge_count} fallas en mismo ACC/EDGE')
-        if repeated_users >= 1:
-            razones.append(f'{repeated_users} usuario(s)/MAC repetido(s)')
-        base = ' | '.join(razones) if razones else f'{similar_count} incidencia(s)/30 dias'
+        base = f'{similar_count} incidencia(s) similar(es)/30 días'
     else:
         ticket.semaforo = 'VERDE'
         ticket.es_reincidente = False
         ticket.criterio_reincidencia = 'ESTABLE'
-        base = f'primer evento — {afect} afectados — sin patron repetitivo en 30 dias'
-
-    if site_count >= 2 and 'repeticion site' not in ' '.join(motivos):
-        motivos.append(f'repeticion site/torre ({site_count}x)')
-    if acc_edge_count >= 2 and 'repeticion ACC' not in ' '.join(motivos):
-        motivos.append(f'repeticion ACC/EDGE ({acc_edge_count}x)')
-    if repeated_users and not any('MAC' in m for m in motivos):
+        base = 'caso aislado: sin patrón repetitivo en últimos 30 días'
+    if masivo and 'evento masivo por cantidad de afectados' not in motivos:
+        motivos.append('evento masivo por cantidad de afectados')
+    if site_count >= 2 and 'repetición por site/torre' not in motivos:
+        motivos.append('repetición por site/torre')
+    if acc_edge_count >= 2 and 'repetición por ACC/EDGE' not in motivos:
+        motivos.append('repetición por ACC/EDGE')
+    if repeated_users:
         motivos.append(f'{repeated_users} usuario(s)/MAC repetido(s)')
-    ticket.motivo_reincidencia = f"{ticket.criterio_reincidencia} — {base}"
-    extras = [m for m in motivos if m not in base]
-    if extras:
-        ticket.motivo_reincidencia += ' | ' + ';'.join(extras[:6])
+    ticket.motivo_reincidencia = f"{ticket.criterio_reincidencia} | {base}"
+    if motivos:
+        ticket.motivo_reincidencia += ' | ' + '; '.join(motivos[:8])
 
 
 def _periodo_inicio_fin(mes_str):
@@ -660,6 +501,9 @@ def parse_slack_message(texto):
             collecting_affected = False
         if re.match(r'^(afectados:?|users:?|usuarios:?)$', clean, re.I):
             collecting_affected = True; continue
+        # Trigger por frase: 'en los siguientes usuarios', 'clientes afectados', etc.
+        if re.search(r'siguientes\s+usuarios|presenta.*usuarios|usuarios\s+afectados|clientes\s+afectados', clean, re.I):
+            collecting_affected = True; continue
 
         if collecting_affected and (re.match(r'^SOMOS-', clean, re.I) or re.search(r'[0-9a-f]{2}(:[0-9a-f]{2}){5}', clean, re.I)):
             data.setdefault('macs', [])
@@ -670,10 +514,25 @@ def parse_slack_message(texto):
                     apt = re.search(r'(?:^|\s)([A-Za-z0-9\-]{2,8})\s*$', clean.strip(), re.I)
                 data['macs'].append({'mac': mmac.group(1), 'apt': apt.group(1) if apt else None})
             else:
-                data['macs'].append({'mac': clean, 'apt': None})
+                # Extraer APT del SOMOS-ID: SOMOS-MDE-SITE-TX-APPT-N → seg[4]
+                somos_apt = None
+                somos_m = re.match(r'^SOMOS-[A-Z]{2,4}-[A-Z0-9]+-[A-Z]\d+-(\d{3,4})-\d+$', clean, re.I)
+                if somos_m:
+                    somos_apt = somos_m.group(1)
+                data['macs'].append({'mac': clean, 'apt': somos_apt})
 
         m = re.search(r'Ticket\s*#?\s*(\d+)', clean, re.I)
         if m: data['slack_num'] = m.group(1)
+
+        # Capturar SOMOS-IDs sueltos aunque collecting_affected sea False
+        # (a veces aparecen antes de cualquier encabezado de afectados)
+        if not collecting_affected and re.match(r'^SOMOS-[A-Z]{2,4}-', clean, re.I):
+            data.setdefault('macs', [])
+            somos_m2 = re.match(r'^SOMOS-[A-Z]{2,4}-[A-Z0-9]+-[A-Z]\d+-(\d{3,4})-\d+$', clean, re.I)
+            somos_apt2 = somos_m2.group(1) if somos_m2 else None
+            # No duplicar
+            if not any(e.get('mac') == clean for e in data.get('macs', [])):
+                data['macs'].append({'mac': clean, 'apt': somos_apt2})
 
         m = re.search(r'Edge/ACC\s+(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', clean, re.I)
         if m:
@@ -863,7 +722,7 @@ def get_tickets():
         q = q.filter(Ticket.tecnico_id == session['tecnico_id']).filter(
             db.or_(
                 db.and_(Ticket.fecha_apertura >= inicio_hoy, Ticket.fecha_apertura < fin_hoy),
-                Ticket.estado.in_(['ASIGNADO', 'EN_TRANSITO', 'EN_SITIO'])
+                Ticket.estado.in_(['EN_TRANSITO', 'EN_SITIO'])
             )
         )
     elif request.args.get('tecnico_id'):
@@ -1043,14 +902,14 @@ def asignar_ticket(tid):
     tec = Tecnico.query.get_or_404(data.get('tecnico_id'))
 
     if t.estado in ['CERRADO', 'ESCALADO', 'CANCELADO']:
-        return jsonify({'error': f'No se puede asignar un ticket en estado {t.estado}'}), 400
+        return jsonify({'error': f'No se puede asignar/reasignar un ticket en estado {t.estado}'}), 400
 
     anterior = t.tecnico_rel.nombre if t.tecnico_rel else 'Sin asignar'
     mismo_tecnico = t.tecnico_id == tec.id
-    estaba_en_sitio = t.estado in ('EN_SITIO', 'EN_TRANSITO')
+    estaba_en_sitio = t.estado == 'EN_SITIO'
 
     t.tecnico_id = tec.id
-    t.estado = 'ASIGNADO'
+    t.estado = 'EN_TRANSITO'
     t.fecha_asignacion = now_colombia()
 
     # Si cambia de técnico y ya estaba en sitio, reiniciamos llegada para que
@@ -1075,66 +934,6 @@ def asignar_ticket(tid):
     log_actividad(msg, 'assign', t.id, session.get('nombre'))
     db.session.commit()
     sync_ticket_to_sheets(t, action)
-    return jsonify(t.to_dict())
-
-
-
-@app.route('/api/tickets/<int:tid>/historial-tecnico', methods=['GET'])
-@require_login()
-def get_historial_tecnico(tid):
-    """Historial anonimo para tecnico: contexto tecnico sin nombres."""
-    t = Ticket.query.get_or_404(tid)
-    if session['rol'] == 'tecnico' and t.tecnico_id != session['tecnico_id']:
-        abort(403)
-    eventos = _historial_operativo_anonimo(t, limit=10)
-    return jsonify({
-        'es_reincidente': t.es_reincidente,
-        'criterio': t.criterio_reincidencia,
-        'motivo': t.motivo_reincidencia,
-        'evento_num': t.evento_num,
-        'total_eventos': len(eventos),
-        'eventos': eventos,
-    })
-
-
-@app.route('/api/tickets/<int:tid>/historial-coordinador', methods=['GET'])
-@require_login(['coordinador'])
-def get_historial_coordinador(tid):
-    """Trazabilidad completa para coordinador/supervisor con tecnicos y fechas."""
-    t = Ticket.query.get_or_404(tid)
-    eventos = _historial_completo_coordinador(t, limit=20)
-    # Calcular metricas de patron
-    total = len(eventos)
-    tecnicos_involucrados = list({e['tecnico_asignado'] for e in eventos if e.get('tecnico_asignado')})
-    mttrs = [e['mttr_minutos'] for e in eventos if e.get('mttr_minutos')]
-    deltas = sorted([e['delta_dias'] for e in eventos if e.get('delta_dias') is not None])
-    return jsonify({
-        'ticket_actual': t.to_dict(),
-        'es_reincidente': t.es_reincidente,
-        'criterio': t.criterio_reincidencia,
-        'motivo': t.motivo_reincidencia,
-        'evento_num': t.evento_num,
-        'total_historico': total,
-        'tecnicos_involucrados': tecnicos_involucrados,
-        'promedio_mttr': round(sum(mttrs)/len(mttrs)) if mttrs else None,
-        'intervalo_min_dias': min(deltas) if deltas else None,
-        'intervalo_max_dias': max(deltas) if deltas else None,
-        'eventos': eventos,
-    })
-
-@app.route('/api/tickets/<int:tid>/en-camino', methods=['PUT'])
-@require_login()
-def marcar_en_camino(tid):
-    t = Ticket.query.get_or_404(tid)
-    if session['rol'] == 'tecnico' and t.tecnico_id != session['tecnico_id']: abort(403)
-    if t.estado not in ('ASIGNADO', 'ABIERTO'):
-        return jsonify({'error': f'Estado actual {t.estado} no permite marcar en camino'}), 400
-    t.estado = 'EN_TRANSITO'
-    if not t.fecha_asignacion:
-        t.fecha_asignacion = now_colombia()
-    log_actividad(f"En camino — #{t.slack_num or t.id} {t.site}", 'assign', t.id, session.get('nombre'))
-    db.session.commit()
-    sync_ticket_to_sheets(t, 'en_camino')
     return jsonify(t.to_dict())
 
 
@@ -1190,7 +989,7 @@ def cambiar_estado_ticket(tid):
     data = request.json or {}
     nuevo_estado = data.get('estado')
 
-    estados_validos = ['ABIERTO', 'ASIGNADO', 'EN_TRANSITO', 'EN_SITIO', 'ESCALADO']
+    estados_validos = ['ABIERTO', 'EN_TRANSITO', 'EN_SITIO', 'ESCALADO']
     if nuevo_estado not in estados_validos:
         return jsonify({'error': 'Estado inválido. Usa ABIERTO, EN_TRANSITO, EN_SITIO o ESCALADO.'}), 400
 
@@ -1303,7 +1102,7 @@ def eliminar_tecnico_permanente(tid):
     t = Tecnico.query.get_or_404(tid)
     activos = Ticket.query.filter(
         Ticket.tecnico_id == tid,
-        Ticket.estado.in_(['ABIERTO', 'ASIGNADO', 'EN_TRANSITO', 'EN_SITIO'])
+        Ticket.estado.in_(['ABIERTO', 'EN_TRANSITO', 'EN_SITIO'])
     ).count()
     if activos > 0:
         return jsonify({'error': f'El técnico tiene {activos} ticket(s) activo(s). Reasígnalos primero.'}), 400
@@ -1324,7 +1123,6 @@ def get_kpis():
     cerrados    = sum(1 for t in tickets if t.estado == 'CERRADO')
     reincid     = sum(1 for t in tickets if t.es_reincidente)
     sin_asignar = sum(1 for t in tickets if t.estado == 'ABIERTO' and not t.tecnico_id)
-    asignados   = sum(1 for t in tickets if t.estado == 'ASIGNADO')
     afectados   = sum(t.afectados for t in tickets if t.estado != 'CERRADO')
     fcr = round(sum(1 for t in tickets if t.estado == 'CERRADO' and not t.es_reincidente) / cerrados * 100) if cerrados else 0
     mttrs = [t.mttr_minutos for t in tickets if t.mttr_minutos]
@@ -1344,7 +1142,7 @@ def get_kpis():
 
     return jsonify({
         'total': total, 'abiertos': sum(1 for t in tickets if t.estado == 'ABIERTO'),
-        'sin_asignar': sin_asignar, 'en_transito': sum(1 for t in tickets if t.estado in ('ASIGNADO','EN_TRANSITO')),
+        'sin_asignar': sin_asignar, 'en_transito': sum(1 for t in tickets if t.estado == 'EN_TRANSITO'),
         'en_sitio': sum(1 for t in tickets if t.estado == 'EN_SITIO'), 'cerrados': cerrados,
         'afectados': afectados, 'reincidentes': reincid,
         'sites_rojo': len(set(f"{t.site} {t.torre}" for t in tickets if t.semaforo == 'ROJO')),
@@ -1889,15 +1687,6 @@ def ensure_schema_updates():
             )
             conn.exec_driver_sql(
                 "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS cancelado_por VARCHAR(80)"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE cierres ADD COLUMN IF NOT EXISTS pruebas TEXT"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE cierres ADD COLUMN IF NOT EXISTS hallazgos TEXT"
-            )
-            conn.exec_driver_sql(
-                "ALTER TABLE cierres ADD COLUMN IF NOT EXISTS soluciones_desc TEXT"
             )
     except Exception as e:
         print(f"[WARN] No se pudo actualizar schema: {e}")
