@@ -1693,9 +1693,12 @@ def ensure_schema_updates():
 
 
 with app.app_context():
-    db.create_all()
-    ensure_schema_updates()
-    seed_db()
+    try:
+        db.create_all()
+        ensure_schema_updates()
+        seed_db()
+    except Exception as e:
+        print(f"[WARN] DB init failed at startup (will retry on first request): {e}")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
