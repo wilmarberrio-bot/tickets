@@ -94,6 +94,8 @@ class Ticket(db.Model):
     site            = db.Column(db.String(120), nullable=False)
     torre           = db.Column(db.String(40))
     zona            = db.Column(db.String(50))
+    codigo_sitio    = db.Column(db.String(40))
+    site_url        = db.Column(db.Text)
     acc_nombre      = db.Column(db.String(120))
     acc_ip          = db.Column(db.String(20))
     edge_nombre     = db.Column(db.String(120))
@@ -138,6 +140,8 @@ class Ticket(db.Model):
             'site': self.site,
             'torre': self.torre,
             'zona': self.zona,
+            'codigo_sitio': self.codigo_sitio,
+            'site_url': self.site_url,
             'acc_nombre': self.acc_nombre,
             'acc_ip': self.acc_ip,
             'edge_nombre': self.edge_nombre,
@@ -479,119 +483,163 @@ def _periodo_inicio_fin(mes_str):
 
 
 def parse_slack_message(texto):
-    """Parsea mensajes reales de Slack con formato de ticket FTTH."""
+    """Parsea mensajes de Slack con formato de ticket FTTH.
+
+    Soporta la plantilla antigua ("Ticket #499730", "Edge/ACC COL_...", "Torre 2",
+    "Modelo equipo: S600") y la nueva ("#Ticket: 782544", "Edge/ACC: COL_...",
+    "Torre: Torre 1", "Modelo del Equipo: 310", "Código del Sitio", "Link del Sitio").
+    """
     data = {}
-    texto = texto.replace('\xa0', ' ')
+    texto = (texto or '').replace('\xa0', ' ')
     texto = re.sub(r'\r\n?', '\n', texto)
-    lines = [l.strip() for l in texto.split('\n') if l.strip()]
+    # Slack envuelve en *negrita* / _cursiva_ y los links en <url|texto>
+    texto = re.sub(r'<(https?://[^>|]+)(?:\|[^>]*)?>', r'\1', texto)
+    lines = []
+    for l in texto.split('\n'):
+        # Solo * y ` se quitan en todo el texto: el _ es parte de COL_... y de las URLs
+        l = re.sub(r'[*`]+', '', l).strip().strip('_').strip()
+        l = re.sub(r'^[•·\-–]\s+', '', l)
+        if l:
+            lines.append(l)
+
+    MAC_RE = r'([0-9a-f]{2}(?::[0-9a-f]{2}){5})'
+    # Encabezados que cierran la captura de Observación / afectados
+    STOP_RE = (r'^(#?\s*ticket\b|c[oó]digo\s+del\s+sitio|nombre\s+del\s+sitio|torre\b|edge/acc|'
+               r'modelo(\s+del)?\s+equipo|#?\s*afectados|tipo\s+de\s+problema|observaci[oó]n|'
+               r'link\s+del\s+sitio|topolog[ií]a|ubicaci[oó]n|zona\b|appointment|t[eé]cnico:?|@)')
+
+    def set_net(nombre, ip):
+        up = nombre.upper()
+        if 'ACC' in up:
+            data['acc_nombre'] = nombre; data['acc_ip'] = ip
+        elif 'EDGE' in up:
+            data['edge_nombre'] = nombre; data['edge_ip'] = ip
+
+    def add_afectado(clean):
+        data.setdefault('macs', [])
+        mmac = re.search(MAC_RE, clean, re.I)
+        somos = re.match(r'^(SOMOS-[A-Z]{2,4}-[A-Z0-9]+-[A-Z]?\d+-(\d{2,5})-\d+)', clean, re.I)
+        apt = None
+        if somos:
+            apt = somos.group(2)
+        if mmac:
+            m_apt = re.search(r'APT\s*([A-Za-z0-9\-]+)', clean, re.I)
+            if m_apt:
+                apt = m_apt.group(1)
+            elif not somos:
+                m_apt = re.search(r'(?:^|\s)([A-Za-z0-9\-]{2,8})\s*$', clean, re.I)
+                if m_apt and not re.fullmatch(r'[\d.]+', m_apt.group(1)):
+                    apt = m_apt.group(1)
+            entry = {'mac': mmac.group(1), 'apt': apt}
+        else:
+            entry = {'mac': somos.group(1) if somos else clean, 'apt': apt}
+        if not any(e.get('mac') == entry['mac'] for e in data['macs']):
+            data['macs'].append(entry)
 
     collecting_obs = False
     obs_lines = []
     collecting_affected = False
+    pending_url = None  # 'topologia' | 'ubicacion' | 'site' cuando el link viene en la línea siguiente
 
-    for i, line in enumerate(lines):
-        clean = line.strip()
-        low = clean.lower()
-
-        if re.match(r'^(topolog[ií]a|ubicaci[oó]n|afectados:?|users:?|usuarios:?|t[eé]cnico:?|@)', clean, re.I):
+    for i, clean in enumerate(lines):
+        is_header = re.match(STOP_RE, clean, re.I)
+        if is_header:
             collecting_obs = False
+            collecting_affected = False
+            pending_url = None
+
+        # ── Afectados ──
+        if re.match(r'^(afectados|users|usuarios)\s*:?$', clean, re.I) or \
+           re.search(r'siguientes\s+usuarios|presenta.*usuarios|usuarios\s+afectados|clientes\s+afectados', clean, re.I):
+            collecting_obs = False
+            collecting_affected = True
+            continue
+        if re.match(r'^SOMOS-[A-Z]{2,4}-', clean, re.I) or \
+           (collecting_affected and re.search(MAC_RE, clean, re.I)):
+            add_afectado(clean)
+
+        # ── Observación (multilínea) ──
         if collecting_obs:
             obs_lines.append(clean)
-        if re.match(r'^(topolog[ií]a|ubicaci[oó]n|observaci[oó]n|tipo de problema|modelo equipo|nombre del sitio|torre\b|edge/acc|#\s*ticket|ticket\b)', clean, re.I):
-            collecting_affected = False
-        if re.match(r'^(afectados:?|users:?|usuarios:?)$', clean, re.I):
-            collecting_affected = True; continue
-        # Trigger por frase: 'en los siguientes usuarios', 'clientes afectados', etc.
-        if re.search(r'siguientes\s+usuarios|presenta.*usuarios|usuarios\s+afectados|clientes\s+afectados', clean, re.I):
-            collecting_affected = True; continue
 
-        if collecting_affected and (re.match(r'^SOMOS-', clean, re.I) or re.search(r'[0-9a-f]{2}(:[0-9a-f]{2}){5}', clean, re.I)):
-            data.setdefault('macs', [])
-            mmac = re.search(r'([0-9a-f]{2}(?::[0-9a-f]{2}){5})', clean, re.I)
-            if mmac:
-                apt = re.search(r'APT\s*([A-Za-z0-9\-]+)', clean, re.I)
-                if not apt:
-                    apt = re.search(r'(?:^|\s)([A-Za-z0-9\-]{2,8})\s*$', clean.strip(), re.I)
-                data['macs'].append({'mac': mmac.group(1), 'apt': apt.group(1) if apt else None})
-            else:
-                # Extraer APT del SOMOS-ID: SOMOS-MDE-SITE-TX-APPT-N → seg[4]
-                somos_apt = None
-                somos_m = re.match(r'^SOMOS-[A-Z]{2,4}-[A-Z0-9]+-[A-Z]\d+-(\d{3,4})-\d+$', clean, re.I)
-                if somos_m:
-                    somos_apt = somos_m.group(1)
-                data['macs'].append({'mac': clean, 'apt': somos_apt})
-
-        m = re.search(r'Ticket\s*#?\s*(\d+)', clean, re.I)
+        # ── Ticket ──
+        m = re.match(r'^#?\s*Ticket\s*[:#]?\s*#?\s*(\d+)', clean, re.I) or \
+            (None if data.get('slack_num') else re.search(r'Ticket\s*[:#]\s*#?\s*(\d+)', clean, re.I))
+        # Respaldo: número sin la palabra "Ticket" ("#782544", "N° 782544", "No. 782544")
+        if not m and not data.get('slack_num'):
+            m = re.match(r'^(?:#|N[°ºo]\.?|No\.?)\s*(\d{4,})\s*$', clean, re.I)
         if m: data['slack_num'] = m.group(1)
 
-        # Capturar SOMOS-IDs sueltos aunque collecting_affected sea False
-        # (a veces aparecen antes de cualquier encabezado de afectados)
-        if not collecting_affected and re.match(r'^SOMOS-[A-Z]{2,4}-', clean, re.I):
-            data.setdefault('macs', [])
-            somos_m2 = re.match(r'^SOMOS-[A-Z]{2,4}-[A-Z0-9]+-[A-Z]\d+-(\d{3,4})-\d+$', clean, re.I)
-            somos_apt2 = somos_m2.group(1) if somos_m2 else None
-            # No duplicar
-            if not any(e.get('mac') == clean for e in data.get('macs', [])):
-                data['macs'].append({'mac': clean, 'apt': somos_apt2})
-
-        m = re.search(r'Edge/ACC\s+(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', clean, re.I)
+        # ── Edge / ACC ──
+        m = re.search(r'Edge/ACC\s*:?\s*(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', clean, re.I)
         if m:
-            nombre, ip = m.group(1).strip(), m.group(2).strip()
-            if 'ACC' in nombre.upper(): data['acc_nombre'] = nombre; data['acc_ip'] = ip
-            else: data['edge_nombre'] = nombre; data['edge_ip'] = ip
-            if i + 1 < len(lines):
-                nxt = lines[i + 1].strip()
-                m2 = re.search(r'^(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', nxt, re.I)
-                if m2:
-                    n2, ip2 = m2.group(1).strip(), m2.group(2).strip()
-                    if 'ACC' in n2.upper(): data['acc_nombre'] = n2; data['acc_ip'] = ip2
-                    elif 'EDGE' in n2.upper(): data['edge_nombre'] = n2; data['edge_ip'] = ip2
-
-        m = re.search(r'^(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', clean, re.I)
+            set_net(m.group(1).strip(), m.group(2).strip())
+        m = re.match(r'^(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', clean, re.I)
         if m:
-            nombre, ip = m.group(1).strip(), m.group(2).strip()
-            if 'ACC' in nombre.upper(): data['acc_nombre'] = nombre; data['acc_ip'] = ip
-            elif 'EDGE' in nombre.upper(): data['edge_nombre'] = nombre; data['edge_ip'] = ip
+            # No pisar el equipo de cabecera con uno repetido dentro de la observación
+            nombre = m.group(1).strip()
+            key = 'acc_nombre' if 'ACC' in nombre.upper() else 'edge_nombre'
+            if not data.get(key):
+                set_net(nombre, m.group(2).strip())
 
-        m = re.search(r'Nombre\s+del\s+sitio\s*:?-?\s*(.+)', clean, re.I)
+        # ── Campos con etiqueta ──
+        m = re.match(r'^C[oó]digo\s+del\s+sitio\s*:?\s*(.+)', clean, re.I)
+        if m: data['codigo_sitio'] = m.group(1).strip()
+
+        m = re.match(r'^Nombre\s+del\s+sitio\s*:?\s*(.+)', clean, re.I)
         if m: data['site'] = m.group(1).strip()
 
-        # Torre
-        m = re.search(r'\bTorre\s*:?-?\s*([A-Za-z0-9\-]+)', clean, re.I)
-        if m:
-            data['torre'] = f"Torre {m.group(1).strip()}"
+        m = re.match(r'^Torre\s*:?\s*(?:Torre\s*)?([A-Za-z0-9\-]+)\s*$', clean, re.I)
+        if m: data['torre'] = f"Torre {m.group(1).strip()}"
 
-        # Zona
-        m = re.search(r'\bZona\s*:?-?\s*(.+)', clean, re.I)
-        if m:
-            data['zona'] = m.group(1).strip()
+        m = re.match(r'^Zona\s*:?\s*(.+)', clean, re.I)
+        if m: data['zona'] = m.group(1).strip()
 
-        # Modelo equipo
-        m = re.search(r'Modelo\s+equipo\s*:?-?\s*(.+)', clean, re.I)
-        if m:
-            data['modelo'] = m.group(1).strip()
+        m = re.match(r'^Modelo(?:\s+del)?\s+equipo\s*:?\s*(.+)', clean, re.I)
+        if m: data['modelo'] = m.group(1).strip()[:20]
 
-        m = re.search(r'#\s*Afectados\s*:?-?\s*(\d+)', clean, re.I)
+        m = re.match(r'^#?\s*Afectados\s*:?\s*(\d+)', clean, re.I)
         if m: data['afectados'] = int(m.group(1))
 
-        m = re.search(r'Tipo\s+de\s+Problema\s*:?-?\s*(.+)', clean, re.I)
+        m = re.match(r'^Tipo\s+de\s+Problema\s*:?\s*(.+)', clean, re.I)
         if m: data['tipo'] = m.group(1).strip()
 
-        if re.match(r'^Observaci[oó]n\s*:?-?\s*$', clean, re.I):
-            collecting_obs = True; continue
-        m = re.search(r'Observaci[oó]n\s*:?-?\s*(.+)', clean, re.I)
-        if m: data['observacion'] = m.group(1).strip()
+        if re.match(r'^Observaci[oó]n\s*:?\s*$', clean, re.I):
+            collecting_obs = True
+            continue
+        m = re.match(r'^Observaci[oó]n\s*:?\s*(.+)', clean, re.I)
+        if m:
+            obs_lines.append(m.group(1).strip())
+            collecting_obs = True
 
-        m = re.search(r'Appointment\s*#?\s*(\d+)', clean, re.I)
+        m = re.search(r'Appointment\s*[:#]?\s*#?\s*(\d+)', clean, re.I)
         if m: data['appointment_num'] = m.group(1)
+
+        # ── URLs: la etiqueta manda; si no hay, se infiere por el dominio ──
+        low = clean.lower()
+        if re.match(r'^topolog[ií]a', low):
+            pending_url = 'topologia'
+        elif re.match(r'^ubicaci[oó]n', low):
+            pending_url = 'ubicacion'
+        elif re.match(r'^link\s+del\s+sitio', low):
+            pending_url = 'site'
 
         m = re.search(r'(https?://\S+)', clean)
         if m:
             url = m.group(1).strip()
-            prev = lines[i - 1].lower() if i > 0 else ''
-            ctx = low + ' ' + prev
-            if 'drive' in url.lower() or 'topolog' in ctx: data['topologia_url'] = url
-            elif 'maps' in url.lower() or 'goo.gl' in url.lower() or 'ubicac' in ctx: data['ubicacion_url'] = url
+            kind = pending_url
+            if not kind:
+                ul = url.lower()
+                if 'maps' in ul or 'goo.gl' in ul: kind = 'ubicacion'
+                elif 'drive' in ul: kind = 'topologia'
+                elif '/sites/' in ul: kind = 'site'
+            if kind == 'topologia' and not data.get('topologia_url'):
+                data['topologia_url'] = url
+            elif kind == 'ubicacion' and not data.get('ubicacion_url'):
+                data['ubicacion_url'] = url
+            elif kind == 'site' and not data.get('site_url'):
+                data['site_url'] = url
+            pending_url = None
 
     if obs_lines and 'observacion' not in data:
         data['observacion'] = '\n'.join(obs_lines).strip()
@@ -863,6 +911,8 @@ def crear_ticket():
         site            = data['site'],
         torre           = data.get('torre', 'Torre 1'),
         zona            = data.get('zona'),
+        codigo_sitio    = data.get('codigo_sitio') or None,
+        site_url        = data.get('site_url') or None,
         acc_nombre      = data.get('acc_nombre'),
         acc_ip          = data.get('acc_ip'),
         edge_nombre     = data.get('edge_nombre'),
@@ -1241,18 +1291,18 @@ def export_csv():
     output = io.StringIO()
     output.write('﻿')  # BOM para Excel
     w = csv.writer(output)
-    w.writerow(['ID', 'Ticket Slack', 'Fecha Apertura', 'Site', 'Torre',
+    w.writerow(['ID', 'Ticket Slack', 'Fecha Apertura', 'Codigo Sitio', 'Site', 'Torre',
                 'ACC', 'IP ACC', 'Modelo', 'Tipo de Falla', 'Afectados',
                 'Tecnico', 'Estado', 'Semaforo', 'Reincidente',
                 'Fecha Asignacion', 'Fecha Llegada', 'Fecha Cierre', 'MTTR (min)',
-                'Causa Raiz', 'Clasificacion', 'Solucion', 'Recomendacion'])
+                'Causa Raiz', 'Clasificacion', 'Solucion', 'Recomendacion', 'Link Sitio'])
 
     for t in tickets:
         tec = t.tecnico_rel; c = t.cierre
         w.writerow([
             t.id, t.slack_num,
             t.fecha_apertura.strftime('%Y-%m-%d %H:%M') if t.fecha_apertura else '',
-            t.site, t.torre, t.acc_nombre, t.acc_ip, t.modelo, t.tipo, t.afectados,
+            t.codigo_sitio or '', t.site, t.torre, t.acc_nombre, t.acc_ip, t.modelo, t.tipo, t.afectados,
             tec.nombre if tec else '',
             t.estado, t.semaforo, 'Si' if t.es_reincidente else 'No',
             t.fecha_asignacion.strftime('%Y-%m-%d %H:%M') if t.fecha_asignacion else '',
@@ -1261,6 +1311,7 @@ def export_csv():
             t.mttr_minutos or '',
             c.causa_raiz if c else '', c.clasificacion if c else '',
             c.solucion if c else '', c.recomendacion if c else '',
+            t.site_url or '',
         ])
 
     fname = f"tickets_{desde or 'inicio'}_{hasta or 'hoy'}.csv"
@@ -1294,10 +1345,10 @@ def export_excel():
         bottom=Side(style='thin', color='CCCCCC'),
     )
 
-    headers = ['ID', 'Ticket Slack', 'Fecha Apertura', 'Site', 'Torre', 'ACC',
+    headers = ['ID', 'Ticket Slack', 'Fecha Apertura', 'Codigo Sitio', 'Site', 'Torre', 'ACC',
                'IP ACC', 'Modelo', 'Tipo de Falla', 'Afectados', 'Tecnico', 'Estado',
                'Semaforo', 'Reincidente', 'Fecha Cierre', 'MTTR (min)', 'Causa Raiz',
-               'Clasificacion', 'Solucion']
+               'Clasificacion', 'Solucion', 'Link Sitio']
 
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -1311,13 +1362,14 @@ def export_excel():
         row = [
             t.id, t.slack_num,
             t.fecha_apertura.strftime('%Y-%m-%d %H:%M') if t.fecha_apertura else '',
-            t.site, t.torre, t.acc_nombre, t.acc_ip, t.modelo, t.tipo, t.afectados,
+            t.codigo_sitio or '', t.site, t.torre, t.acc_nombre, t.acc_ip, t.modelo, t.tipo, t.afectados,
             tec.nombre if tec else '',
             t.estado, t.semaforo, 'Si' if t.es_reincidente else 'No',
             t.fecha_cierre.strftime('%Y-%m-%d %H:%M') if t.fecha_cierre else '',
             t.mttr_minutos or '',
             c.causa_raiz if c else '', c.clasificacion if c else '',
             (c.solucion[:200] if c and c.solucion else ''),
+            t.site_url or '',
         ]
         ws.append(row)
         fill_color = sem_colors.get(t.semaforo, 'FFFFFF')
@@ -1628,6 +1680,8 @@ def webhook_slack():
         site            = parsed.get('site', 'Sin nombre'),
         torre           = parsed.get('torre', 'Torre 1'),
         zona            = parsed.get('zona'),
+        codigo_sitio    = parsed.get('codigo_sitio'),
+        site_url        = parsed.get('site_url'),
         acc_nombre      = parsed.get('acc_nombre'),
         acc_ip          = parsed.get('acc_ip'),
         edge_nombre     = parsed.get('edge_nombre'),
@@ -1687,6 +1741,12 @@ def ensure_schema_updates():
             )
             conn.exec_driver_sql(
                 "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS cancelado_por VARCHAR(80)"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS codigo_sitio VARCHAR(40)"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS site_url TEXT"
             )
     except Exception as e:
         print(f"[WARN] No se pudo actualizar schema: {e}")
