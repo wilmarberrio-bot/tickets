@@ -3,7 +3,7 @@ Torre de Control FTTH — Somos Internet  v2.0
 Flask backend con roles, exportación, archivo mensual y KPIs históricos
 """
 
-import os, re, json, csv, io, traceback, urllib.request, urllib.error
+import os, re, json, csv, io, traceback, unicodedata, urllib.request, urllib.error
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from flask import (Flask, render_template, request, jsonify,
@@ -96,6 +96,7 @@ class Ticket(db.Model):
     zona            = db.Column(db.String(50))
     codigo_sitio    = db.Column(db.String(40))
     site_url        = db.Column(db.Text)
+    equipo          = db.Column(db.String(20))   # Acceso | Intrasite
     acc_nombre      = db.Column(db.String(120))
     acc_ip          = db.Column(db.String(20))
     edge_nombre     = db.Column(db.String(120))
@@ -142,6 +143,7 @@ class Ticket(db.Model):
             'zona': self.zona,
             'codigo_sitio': self.codigo_sitio,
             'site_url': self.site_url,
+            'equipo': self.equipo,
             'acc_nombre': self.acc_nombre,
             'acc_ip': self.acc_ip,
             'edge_nombre': self.edge_nombre,
@@ -490,7 +492,8 @@ def parse_slack_message(texto):
     "Torre: Torre 1", "Modelo del Equipo: 310", "Código del Sitio", "Link del Sitio").
     """
     data = {}
-    texto = (texto or '').replace('\xa0', ' ')
+    # NFC: Slack/Mac a veces envían la 'ó' como 'o' + tilde combinable y las regex no la reconocen
+    texto = unicodedata.normalize('NFC', texto or '').replace('\xa0', ' ')
     texto = re.sub(r'\r\n?', '\n', texto)
     # Slack envuelve en *negrita* / _cursiva_ y los links en <url|texto>
     texto = re.sub(r'<(https?://[^>|]+)(?:\|[^>]*)?>', r'\1', texto)
@@ -503,10 +506,14 @@ def parse_slack_message(texto):
             lines.append(l)
 
     MAC_RE = r'([0-9a-f]{2}(?::[0-9a-f]{2}){5})'
-    # Encabezados que cierran la captura de Observación / afectados
-    STOP_RE = (r'^(#?\s*ticket\b|c[oó]digo\s+del\s+sitio|nombre\s+del\s+sitio|torre\b|edge/acc|'
-               r'modelo(\s+del)?\s+equipo|#?\s*afectados|tipo\s+de\s+problema|observaci[oó]n|'
-               r'link\s+del\s+sitio|topolog[ií]a|ubicaci[oó]n|zona\b|appointment|t[eé]cnico:?|@)')
+    # Encabezados que cierran la captura de Observación / afectados. Solo cuentan si la
+    # etiqueta va seguida de ':' (o está sola en la línea), así un texto de observación
+    # como "Torre 1 sin servicio" o "Zona común caída" no la corta.
+    STOP_RE = (r'^(#?\s*ticket\s*[:#]|c[oó]digo\s+del\s+sitio\s*:|nombre\s+del\s+sitio\s*:|'
+               r'torre\s*:|torre\s+[a-z0-9\-]+\s*$|edge/acc\b|modelo(\s+del)?\s+equipo\s*:|'
+               r'#?\s*afectados\s*:|tipo\s+de\s+problema\s*:|observaci[oó]n(es)?\b|'
+               r'link\s+del\s+sitio\s*(:|$)|topolog[ií]a\s*(:|$)|ubicaci[oó]n\s*(:|$)|zona\s*:|'
+               r'appointment\b|t[eé]cnico\s*:|@)')
 
     def set_net(nombre, ip):
         up = nombre.upper()
@@ -548,9 +555,19 @@ def parse_slack_message(texto):
             collecting_affected = False
             pending_url = None
 
+        # ── Equipo: "Hola Equipo Soporte Acceso" / "Soporte Intrasite" / "Equipo: Acceso" ──
+        m = re.search(r'\b(?:Equipo\s+)?Soporte\s+(Acceso|Intra[\s\-]?site)\b', clean, re.I) or \
+            re.match(r'^Equipo\s*:\s*(Acceso|Intra[\s\-]?site)\b', clean, re.I)
+        if m and not data.get('equipo'):
+            data['equipo'] = 'Acceso' if m.group(1).lower().startswith('acc') else 'Intrasite'
+
         # ── Afectados ──
+        # Dentro de la observación solo cuenta un encabezado explícito ("Usuarios afectados:"),
+        # no frases como "se presenta intermitencia en los usuarios".
+        afect_frase = r'siguientes\s+usuarios|presenta.*usuarios|usuarios\s+afectados|clientes\s+afectados'
         if re.match(r'^(afectados|users|usuarios)\s*:?$', clean, re.I) or \
-           re.search(r'siguientes\s+usuarios|presenta.*usuarios|usuarios\s+afectados|clientes\s+afectados', clean, re.I):
+           (collecting_obs and re.match(r'^(usuarios|clientes)\s+afectados\s*:?\s*$', clean, re.I)) or \
+           (not collecting_obs and re.search(afect_frase, clean, re.I)):
             collecting_obs = False
             collecting_affected = True
             continue
@@ -558,9 +575,15 @@ def parse_slack_message(texto):
            (collecting_affected and re.search(MAC_RE, clean, re.I)):
             add_afectado(clean)
 
-        # ── Observación (multilínea) ──
+        # ── Observación (multilínea): la línea es texto, no se interpreta como campo ──
         if collecting_obs:
             obs_lines.append(clean)
+            m = re.match(r'^(COL_[A-Z0-9_]+)\s*-\s*([\d.]+)', clean, re.I)
+            if m:
+                nombre = m.group(1).strip()
+                if not data.get('acc_nombre' if 'ACC' in nombre.upper() else 'edge_nombre'):
+                    set_net(nombre, m.group(2).strip())
+            continue
 
         # ── Ticket ──
         m = re.match(r'^#?\s*Ticket\s*[:#]?\s*#?\s*(\d+)', clean, re.I) or \
@@ -604,13 +627,13 @@ def parse_slack_message(texto):
         m = re.match(r'^Tipo\s+de\s+Problema\s*:?\s*(.+)', clean, re.I)
         if m: data['tipo'] = m.group(1).strip()
 
-        if re.match(r'^Observaci[oó]n\s*:?\s*$', clean, re.I):
+        # "Observación:", "Observaciones:", "Observación -", con texto en la misma línea o debajo
+        m = re.match(r'^Observaci[oó]n(?:es)?\b\s*[:\-–]?\s*(.*)$', clean, re.I)
+        if m:
+            if m.group(1).strip():
+                obs_lines.append(m.group(1).strip())
             collecting_obs = True
             continue
-        m = re.match(r'^Observaci[oó]n\s*:?\s*(.+)', clean, re.I)
-        if m:
-            obs_lines.append(m.group(1).strip())
-            collecting_obs = True
 
         m = re.search(r'Appointment\s*[:#]?\s*#?\s*(\d+)', clean, re.I)
         if m: data['appointment_num'] = m.group(1)
@@ -641,7 +664,7 @@ def parse_slack_message(texto):
                 data['site_url'] = url
             pending_url = None
 
-    if obs_lines and 'observacion' not in data:
+    if obs_lines:
         data['observacion'] = '\n'.join(obs_lines).strip()
     if 'afectados' not in data and data.get('macs'):
         data['afectados'] = len(data['macs'])
@@ -784,6 +807,69 @@ def get_tickets():
     return jsonify([t.to_dict() for t in q.order_by(Ticket.fecha_apertura.desc()).all()])
 
 
+@app.route('/api/ruta-tecnicos', methods=['GET'])
+@require_login(['coordinador'])
+def ruta_tecnicos():
+    """Ruta del día: qué tiene o tuvo cada técnico con soportes en la fecha dada.
+
+    Entra un ticket si fue asignado, llegó o cerró ese día, o si sigue en curso
+    (EN_TRANSITO / EN_SITIO) y fue asignado antes. Se toma el técnico actual del
+    ticket (si hubo reasignación, queda en la ruta del último técnico).
+    """
+    try:
+        dia = datetime.strptime(request.args.get('fecha') or now_colombia().strftime('%Y-%m-%d'), '%Y-%m-%d')
+    except ValueError:
+        return jsonify({'error': 'Fecha inválida, use AAAA-MM-DD'}), 400
+    ini, fin = dia, dia + timedelta(days=1)
+    en_dia = lambda col: db.and_(col >= ini, col < fin)
+
+    q = Ticket.query.filter(Ticket.tecnico_id.isnot(None)).filter(db.or_(
+        en_dia(Ticket.fecha_asignacion),
+        en_dia(Ticket.fecha_llegada),
+        en_dia(Ticket.fecha_cierre),
+        en_dia(Ticket.fecha_cancelacion),
+        db.and_(Ticket.estado.in_(['EN_TRANSITO', 'EN_SITIO']), Ticket.fecha_asignacion < fin),
+    ))
+    if request.args.get('equipo') in ('Acceso', 'Intrasite'):
+        q = q.filter(Ticket.equipo == request.args['equipo'])
+
+    rutas = {}
+    for t in q.all():
+        tec = t.tecnico_rel
+        r = rutas.setdefault(t.tecnico_id, {
+            'tecnico_id': t.tecnico_id,
+            'tecnico': tec.nombre if tec else '—',
+            'zona': tec.zona if tec else None,
+            'telefono': tec.telefono if tec else None,
+            'tickets': [],
+        })
+        r['tickets'].append(t.to_dict())
+
+    orden = lambda d: d.get('fecha_asignacion') or d.get('fecha_apertura') or ''
+    salida = []
+    for r in rutas.values():
+        r['tickets'].sort(key=orden)
+        ts = r['tickets']
+        r['total'] = len(ts)
+        r['cerrados'] = sum(1 for x in ts if x['estado'] == 'CERRADO')
+        r['en_curso'] = sum(1 for x in ts if x['estado'] in ('EN_TRANSITO', 'EN_SITIO'))
+        actual = next((x for x in ts if x['estado'] == 'EN_SITIO'), None) or \
+                 next((x for x in ts if x['estado'] == 'EN_TRANSITO'), None)
+        r['estado_actual'] = actual['estado'] if actual else 'LIBRE'
+        salida.append(r)
+    salida.sort(key=lambda r: (-r['en_curso'], r['tecnico']))
+
+    sin_asignar = Ticket.query.filter(Ticket.tecnico_id.is_(None), Ticket.estado == 'ABIERTO').count()
+    activos = Tecnico.query.filter_by(activo=True).count()
+    return jsonify({
+        'fecha': dia.strftime('%Y-%m-%d'),
+        'tecnicos': salida,
+        'sin_asignar': sin_asignar,
+        'tecnicos_activos': activos,
+        'tecnicos_con_soportes': len(salida),
+    })
+
+
 @app.route('/api/sheets/sync-all', methods=['POST'])
 @require_login(['coordinador'])
 def sync_all_tickets_to_sheets():
@@ -913,6 +999,7 @@ def crear_ticket():
         zona            = data.get('zona'),
         codigo_sitio    = data.get('codigo_sitio') or None,
         site_url        = data.get('site_url') or None,
+        equipo          = data.get('equipo') or None,
         acc_nombre      = data.get('acc_nombre'),
         acc_ip          = data.get('acc_ip'),
         edge_nombre     = data.get('edge_nombre'),
@@ -1291,18 +1378,18 @@ def export_csv():
     output = io.StringIO()
     output.write('﻿')  # BOM para Excel
     w = csv.writer(output)
-    w.writerow(['ID', 'Ticket Slack', 'Fecha Apertura', 'Codigo Sitio', 'Site', 'Torre',
+    w.writerow(['ID', 'Ticket Slack', 'Fecha Apertura', 'Site', 'Torre',
                 'ACC', 'IP ACC', 'Modelo', 'Tipo de Falla', 'Afectados',
                 'Tecnico', 'Estado', 'Semaforo', 'Reincidente',
                 'Fecha Asignacion', 'Fecha Llegada', 'Fecha Cierre', 'MTTR (min)',
-                'Causa Raiz', 'Clasificacion', 'Solucion', 'Recomendacion', 'Link Sitio'])
+                'Causa Raiz', 'Clasificacion', 'Solucion', 'Recomendacion', 'Codigo Sitio', 'Link Sitio', 'Equipo'])
 
     for t in tickets:
         tec = t.tecnico_rel; c = t.cierre
         w.writerow([
             t.id, t.slack_num,
             t.fecha_apertura.strftime('%Y-%m-%d %H:%M') if t.fecha_apertura else '',
-            t.codigo_sitio or '', t.site, t.torre, t.acc_nombre, t.acc_ip, t.modelo, t.tipo, t.afectados,
+            t.site, t.torre, t.acc_nombre, t.acc_ip, t.modelo, t.tipo, t.afectados,
             tec.nombre if tec else '',
             t.estado, t.semaforo, 'Si' if t.es_reincidente else 'No',
             t.fecha_asignacion.strftime('%Y-%m-%d %H:%M') if t.fecha_asignacion else '',
@@ -1311,7 +1398,7 @@ def export_csv():
             t.mttr_minutos or '',
             c.causa_raiz if c else '', c.clasificacion if c else '',
             c.solucion if c else '', c.recomendacion if c else '',
-            t.site_url or '',
+            t.codigo_sitio or '', t.site_url or '', t.equipo or '',
         ])
 
     fname = f"tickets_{desde or 'inicio'}_{hasta or 'hoy'}.csv"
@@ -1345,10 +1432,10 @@ def export_excel():
         bottom=Side(style='thin', color='CCCCCC'),
     )
 
-    headers = ['ID', 'Ticket Slack', 'Fecha Apertura', 'Codigo Sitio', 'Site', 'Torre', 'ACC',
+    headers = ['ID', 'Ticket Slack', 'Fecha Apertura', 'Site', 'Torre', 'ACC',
                'IP ACC', 'Modelo', 'Tipo de Falla', 'Afectados', 'Tecnico', 'Estado',
                'Semaforo', 'Reincidente', 'Fecha Cierre', 'MTTR (min)', 'Causa Raiz',
-               'Clasificacion', 'Solucion', 'Link Sitio']
+               'Clasificacion', 'Solucion', 'Codigo Sitio', 'Link Sitio', 'Equipo']
 
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -1362,14 +1449,14 @@ def export_excel():
         row = [
             t.id, t.slack_num,
             t.fecha_apertura.strftime('%Y-%m-%d %H:%M') if t.fecha_apertura else '',
-            t.codigo_sitio or '', t.site, t.torre, t.acc_nombre, t.acc_ip, t.modelo, t.tipo, t.afectados,
+            t.site, t.torre, t.acc_nombre, t.acc_ip, t.modelo, t.tipo, t.afectados,
             tec.nombre if tec else '',
             t.estado, t.semaforo, 'Si' if t.es_reincidente else 'No',
             t.fecha_cierre.strftime('%Y-%m-%d %H:%M') if t.fecha_cierre else '',
             t.mttr_minutos or '',
             c.causa_raiz if c else '', c.clasificacion if c else '',
             (c.solucion[:200] if c and c.solucion else ''),
-            t.site_url or '',
+            t.codigo_sitio or '', t.site_url or '', t.equipo or '',
         ]
         ws.append(row)
         fill_color = sem_colors.get(t.semaforo, 'FFFFFF')
@@ -1682,6 +1769,7 @@ def webhook_slack():
         zona            = parsed.get('zona'),
         codigo_sitio    = parsed.get('codigo_sitio'),
         site_url        = parsed.get('site_url'),
+        equipo          = parsed.get('equipo'),
         acc_nombre      = parsed.get('acc_nombre'),
         acc_ip          = parsed.get('acc_ip'),
         edge_nombre     = parsed.get('edge_nombre'),
@@ -1747,6 +1835,9 @@ def ensure_schema_updates():
             )
             conn.exec_driver_sql(
                 "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS site_url TEXT"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS equipo VARCHAR(20)"
             )
     except Exception as e:
         print(f"[WARN] No se pudo actualizar schema: {e}")
