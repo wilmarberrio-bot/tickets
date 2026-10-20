@@ -506,6 +506,7 @@ function verDetalle(id) {
   document.getElementById('det-titulo').textContent = `#${t.slack_num||t.id} — ${t.site} ${t.torre||''}`;
   document.getElementById('det-info').innerHTML = `
     <strong>Site:</strong> ${t.site}<br>
+    ${t.codigo_sitio ? `<strong>Código sitio:</strong> ${t.codigo_sitio}<br>` : ''}
     <strong>Torre:</strong> ${t.torre||'—'}<br>
     <strong>Zona:</strong> ${t.zona||'—'}<br>
     <strong>Tipo:</strong> ${t.tipo||'—'}<br>
@@ -534,6 +535,7 @@ function verDetalle(id) {
   const links = [];
   if (t.topologia_url) links.push(`<a href="${t.topologia_url}" target="_blank" class="btn btn-g btn-sm">🔗 Topología Drive</a>`);
   if (t.ubicacion_url) links.push(`<a href="${t.ubicacion_url}" target="_blank" class="btn btn-g btn-sm">📍 Ver en Maps</a>`);
+  if (t.site_url) links.push(`<a href="${t.site_url}" target="_blank" class="btn btn-g btn-sm">🏢 Ver sitio</a>`);
   document.getElementById('det-links').innerHTML = links.join('');
 
   const obsEl = document.getElementById('det-obs');

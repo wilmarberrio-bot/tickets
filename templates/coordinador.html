@@ -152,6 +152,10 @@ Usuarios afectados:
           <div class="mf"><label>Ticket Slack #</label><input type="text" id="n-slack" placeholder="499730"></div>
           <div class="mf"><label>Fecha apertura</label><input type="date" id="n-fecha"></div>
         </div>
+        <div class="mrow">
+          <div class="mf"><label>Código del sitio</label><input type="text" id="n-cod-sitio" placeholder="CMAZ / 436"></div>
+          <div class="mf"><label>Link del sitio (Admin)</label><input type="url" id="n-site-url" placeholder="https://admin.somosinternet.com/sites/..."></div>
+        </div>
         <div class="mf"><label>Nombre del site *</label><input type="text" id="n-site" placeholder="Gaita Apartamentos"></div>
         <div class="mrow">
           <div class="mf"><label>Torre *</label><input type="text" id="n-torre" placeholder="Torre 2"></div>
@@ -530,7 +534,7 @@ function renderTickets(all) {
     return `<tr>
       <td><strong style="color:var(--az2);cursor:pointer" onclick="showTopo(${t.id})">#${t.slack_num||t.id}</strong></td>
       <td style="font-size:11px;color:#8b949e">${fecha}</td>
-      <td>${t.site}<br><span style="font-size:10px;color:#8b949e">${t.torre||''}</span><br><span style="font-size:10px;color:var(--az2)">${t.zona || 'Sin zona'}</span></td>
+      <td>${t.site}${t.codigo_sitio ? ` <span style="font-size:10px;color:#8b949e">[${esc(t.codigo_sitio)}]</span>` : ''}<br><span style="font-size:10px;color:#8b949e">${t.torre||''}</span><br><span style="font-size:10px;color:var(--az2)">${t.zona || 'Sin zona'}</span></td>
       <td style="font-size:10px;color:#8b949e">${t.acc_nombre||'—'}<br>${t.acc_ip||'—'}</td>
       <td>${t.tipo||'—'}</td>
       <td style="font-weight:700;color:${t.afectados>=5?'var(--rj2)':'var(--am2)'}">${t.afectados}</td>
@@ -715,6 +719,7 @@ function renderDetalleCierre(t) {
             <strong>Ticket:</strong> #${esc(t.slack_num || t.id)}<br>
             <strong>Fecha apertura:</strong> ${fmtFecha(t.fecha_apertura)}<br>
             <strong>Site:</strong> ${esc(t.site || '—')}<br>
+            ${t.codigo_sitio ? `<strong>Código sitio:</strong> ${esc(t.codigo_sitio)}<br>` : ''}
             <strong>Torre:</strong> ${esc(t.torre || '—')}<br>
             <strong>Zona:</strong> ${esc(t.zona || '—')}<br>
             <strong>Tipo de falla:</strong> ${esc(t.tipo || '—')}<br>
@@ -873,6 +878,7 @@ async function showTopo(id) {
   const links = [];
   if (t.topologia_url) links.push(`<a href="${esc(t.topologia_url)}" target="_blank" class="btn btn-g btn-sm">🔗 Topología</a>`);
   if (t.ubicacion_url) links.push(`<a href="${esc(t.ubicacion_url)}" target="_blank" class="btn btn-g btn-sm">📍 Ubicación</a>`);
+  if (t.site_url) links.push(`<a href="${esc(t.site_url)}" target="_blank" class="btn btn-g btn-sm">🏢 Sitio${t.codigo_sitio ? ' ' + esc(t.codigo_sitio) : ''}</a>`);
 
   document.getElementById('topo-macs').innerHTML = `
     ${macs.length
@@ -906,6 +912,8 @@ async function parsearSlack() {
 
     document.getElementById('n-slack').value = res.slack_num || '';
     document.getElementById('n-site').value = res.site || '';
+    document.getElementById('n-cod-sitio').value = res.codigo_sitio || '';
+    document.getElementById('n-site-url').value = res.site_url || '';
     document.getElementById('n-torre').value = res.torre || '';
     document.getElementById('n-zona').value = res.zona || '';
     document.getElementById('n-modelo').value = res.modelo || '';
@@ -1006,6 +1014,8 @@ async function registrarTicket() {
 
         macs,
 
+        codigo_sitio: document.getElementById('n-cod-sitio').value.trim(),
+        site_url: document.getElementById('n-site-url').value.trim(),
         topologia_url: document.getElementById('n-topo').value,
         ubicacion_url: document.getElementById('n-maps').value,
         appointment_num: document.getElementById('n-appt').value
@@ -1017,6 +1027,8 @@ async function registrarTicket() {
     [
       'n-slack',
       'n-site',
+      'n-cod-sitio',
+      'n-site-url',
       'n-torre',
       'n-zona',
       'n-acc-nom',
