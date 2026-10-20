@@ -507,6 +507,7 @@ function verDetalle(id) {
   document.getElementById('det-info').innerHTML = `
     <strong>Site:</strong> ${t.site}<br>
     ${t.codigo_sitio ? `<strong>Código sitio:</strong> ${t.codigo_sitio}<br>` : ''}
+    ${t.equipo ? `<strong>Equipo:</strong> ${t.equipo}<br>` : ''}
     <strong>Torre:</strong> ${t.torre||'—'}<br>
     <strong>Zona:</strong> ${t.zona||'—'}<br>
     <strong>Tipo:</strong> ${t.tipo||'—'}<br>

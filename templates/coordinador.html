@@ -31,6 +31,7 @@
   <div class="tab"     onclick="goTab('tecnicos')">👷 Técnicos</div>
   <div class="tab"     onclick="goTab('historico')">📦 Archivo Mensual</div>
   <div class="tab"     onclick="goTab('auditoria')">🔐 Auditoría</div>
+  <div class="tab"     onclick="goTab('ruta')">🗺️ Ruta técnicos</div>
 </div>
 
 <!-- ══════ DASHBOARD ══════ -->
@@ -153,6 +154,7 @@ Usuarios afectados:
           <div class="mf"><label>Fecha apertura</label><input type="date" id="n-fecha"></div>
         </div>
         <div class="mrow">
+          <div class="mf"><label>Equipo</label><select id="n-equipo"><option value="">—</option><option>Acceso</option><option>Intrasite</option></select></div>
           <div class="mf"><label>Código del sitio</label><input type="text" id="n-cod-sitio" placeholder="CMAZ / 436"></div>
           <div class="mf"><label>Link del sitio (Admin)</label><input type="url" id="n-site-url" placeholder="https://admin.somosinternet.com/sites/..."></div>
         </div>
@@ -534,7 +536,7 @@ function renderTickets(all) {
     return `<tr>
       <td><strong style="color:var(--az2);cursor:pointer" onclick="showTopo(${t.id})">#${t.slack_num||t.id}</strong></td>
       <td style="font-size:11px;color:#8b949e">${fecha}</td>
-      <td>${t.site}${t.codigo_sitio ? ` <span style="font-size:10px;color:#8b949e">[${esc(t.codigo_sitio)}]</span>` : ''}<br><span style="font-size:10px;color:#8b949e">${t.torre||''}</span><br><span style="font-size:10px;color:var(--az2)">${t.zona || 'Sin zona'}</span></td>
+      <td>${t.site}${t.codigo_sitio ? ` <span style="font-size:10px;color:#8b949e">[${esc(t.codigo_sitio)}]</span>` : ''}${t.equipo ? ` <span style="font-size:10px;font-weight:600;color:${t.equipo === 'Intrasite' ? 'var(--mo2)' : 'var(--az2)'}">${esc(t.equipo)}</span>` : ''}<br><span style="font-size:10px;color:#8b949e">${t.torre||''}</span><br><span style="font-size:10px;color:var(--az2)">${t.zona || 'Sin zona'}</span></td>
       <td style="font-size:10px;color:#8b949e">${t.acc_nombre||'—'}<br>${t.acc_ip||'—'}</td>
       <td>${t.tipo||'—'}</td>
       <td style="font-weight:700;color:${t.afectados>=5?'var(--rj2)':'var(--am2)'}">${t.afectados}</td>
@@ -720,6 +722,7 @@ function renderDetalleCierre(t) {
             <strong>Fecha apertura:</strong> ${fmtFecha(t.fecha_apertura)}<br>
             <strong>Site:</strong> ${esc(t.site || '—')}<br>
             ${t.codigo_sitio ? `<strong>Código sitio:</strong> ${esc(t.codigo_sitio)}<br>` : ''}
+            ${t.equipo ? `<strong>Equipo:</strong> ${esc(t.equipo)}<br>` : ''}
             <strong>Torre:</strong> ${esc(t.torre || '—')}<br>
             <strong>Zona:</strong> ${esc(t.zona || '—')}<br>
             <strong>Tipo de falla:</strong> ${esc(t.tipo || '—')}<br>
@@ -913,6 +916,7 @@ async function parsearSlack() {
     document.getElementById('n-slack').value = res.slack_num || '';
     document.getElementById('n-site').value = res.site || '';
     document.getElementById('n-cod-sitio').value = res.codigo_sitio || '';
+    document.getElementById('n-equipo').value = res.equipo || '';
     document.getElementById('n-site-url').value = res.site_url || '';
     document.getElementById('n-torre').value = res.torre || '';
     document.getElementById('n-zona').value = res.zona || '';
@@ -1015,6 +1019,7 @@ async function registrarTicket() {
         macs,
 
         codigo_sitio: document.getElementById('n-cod-sitio').value.trim(),
+        equipo: document.getElementById('n-equipo').value,
         site_url: document.getElementById('n-site-url').value.trim(),
         topologia_url: document.getElementById('n-topo').value,
         ubicacion_url: document.getElementById('n-maps').value,
@@ -1028,6 +1033,7 @@ async function registrarTicket() {
       'n-slack',
       'n-site',
       'n-cod-sitio',
+      'n-equipo',
       'n-site-url',
       'n-torre',
       'n-zona',
@@ -1470,6 +1476,72 @@ init();
   </div>
 </div>
 
+<!-- TAB: Ruta técnicos -->
+<div id="tab-ruta" class="tp content">
+  <style>
+    .rt-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+    .rt-kpi{background:var(--pn);border:1px solid var(--g2);border-radius:8px;padding:10px 12px}
+    .rt-kpi .l{font-size:11px;color:#8b949e}
+    .rt-kpi .v{font-size:22px;font-weight:700;margin-top:2px}
+    .rt-leg{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:#8b949e;margin:0 0 10px}
+    .rt-leg i{display:inline-block;width:14px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+    .rt-card{background:var(--pn);border:1px solid var(--g2);border-radius:8px;margin-bottom:10px;overflow:hidden}
+    .rt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--g2)}
+    .rt-name{font-weight:700;font-size:14px}
+    .rt-sub{font-size:11px;color:#8b949e}
+    .rt-chip{font-size:11px;font-weight:600;border:1px solid;border-radius:20px;padding:2px 9px}
+    .rt-cnt{margin-left:auto;font-size:11px;color:#8b949e;white-space:nowrap}
+    .rt-cnt b{color:#e6edf3}
+    .rt-scroll{overflow-x:auto;padding:8px 14px 4px}
+    .rt-track{position:relative;height:34px;min-width:640px;background:var(--g1);border-radius:6px}
+    .rt-axis{position:relative;height:16px;min-width:640px;font-size:10px;color:#8b949e}
+    .rt-axis span{position:absolute;transform:translateX(-50%)}
+    .rt-hl{position:absolute;top:0;bottom:0;border-left:1px dashed var(--g2)}
+    .rt-now{position:absolute;top:-3px;bottom:-3px;border-left:2px solid var(--rj2);z-index:3}
+    .rt-bar{position:absolute;top:5px;height:24px;border-radius:4px;cursor:pointer;display:flex;overflow:hidden;
+            font-size:10px;font-weight:600;color:#0d1117;align-items:center;min-width:6px;z-index:2;box-shadow:0 0 0 1px #0d1117}
+    .rt-bar .seg{height:100%}
+    .rt-bar .lbl{position:absolute;left:5px;right:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .rt-stops{display:flex;gap:8px;flex-wrap:wrap;padding:8px 14px 12px}
+    .rt-stop{border:1px solid var(--g2);border-left:4px solid;border-radius:6px;padding:6px 9px;font-size:11px;cursor:pointer;
+             background:var(--bg);min-width:210px;flex:1 1 210px;max-width:340px}
+    .rt-stop:hover{border-color:var(--az2)}
+    .rt-stop .t1{font-weight:700;color:#e6edf3;margin-bottom:2px}
+    .rt-stop .t2{color:#8b949e}
+    .rt-eq{font-size:10px;border-radius:4px;padding:0 5px;margin-left:4px;font-weight:600}
+    .rt-eq-Acceso{background:#0d1f36;color:var(--az2)}
+    .rt-eq-Intrasite{background:#1a1030;color:var(--mo2)}
+    .rt-empty{padding:30px;text-align:center;color:#8b949e}
+  </style>
+
+  <div class="date-bar">
+    <label>📅 Día:</label>
+    <input type="date" id="rt-fecha" onchange="loadRuta()">
+    <button class="qbtn" onclick="rutaDia(0)">Hoy</button>
+    <button class="qbtn" onclick="rutaDia(-1)">Ayer</button>
+    <span style="width:1px;height:18px;background:var(--g2)"></span>
+    <label>Equipo:</label>
+    <button class="qbtn on" data-eq="" onclick="rutaEquipo(this)">Todos</button>
+    <button class="qbtn" data-eq="Acceso" onclick="rutaEquipo(this)">Acceso</button>
+    <button class="qbtn" data-eq="Intrasite" onclick="rutaEquipo(this)">Intrasite</button>
+    <button class="btn btn-a btn-sm" style="margin-left:auto" onclick="loadRuta()">↺ Actualizar</button>
+    <span id="rt-upd" style="font-size:11px;color:#8b949e"></span>
+  </div>
+
+  <div class="rt-kpis" id="rt-kpis"></div>
+
+  <div class="rt-leg">
+    <span><i style="background:var(--am2)"></i>En camino (asignado → llegada)</span>
+    <span><i style="background:var(--az2)"></i>En sitio (sigue abierto)</span>
+    <span><i style="background:var(--vd2)"></i>En sitio → cerrado</span>
+    <span><i style="background:var(--mo2)"></i>Escalado</span>
+    <span><i style="background:#8b949e"></i>Cancelado</span>
+    <span><i style="background:var(--rj2);width:2px"></i>Hora actual</span>
+  </div>
+
+  <div id="rt-lista"></div>
+</div>
+
 <!-- TAB: Auditoría -->
 <div id="tab-auditoria" class="tp content">
   <div class="panel">
@@ -1499,15 +1571,16 @@ init();
 // ── Override goTab para incluir nuevas tabs ──────────
 const _goTabOriginal = goTab;
 goTab = function(name) {
-  const newTabs = ['historico', 'auditoria'];
+  const newTabs = ['historico', 'auditoria', 'ruta'];
   if (newTabs.includes(name)) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
     document.querySelectorAll('.tp').forEach(t => t.classList.remove('on'));
-    const allTabs = ['dashboard','tickets','nuevo','reinc','tecnicos','historico','auditoria'];
+    const allTabs = ['dashboard','tickets','nuevo','reinc','tecnicos','historico','auditoria','ruta'];
     document.querySelectorAll('.tab')[allTabs.indexOf(name)]?.classList.add('on');
     document.getElementById('tab-'+name)?.classList.add('on');
     if (name === 'historico') { loadHistorico(); loadKpisPorTecnico(); }
     if (name === 'auditoria') loadAuditoria();
+    if (name === 'ruta') loadRuta();
   } else {
     _goTabOriginal(name);
   }
@@ -1773,3 +1846,167 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 </script>
+<script>
+// ══════ RUTA TÉCNICOS ══════
+// Una fila por técnico con soportes en el día: línea de tiempo + paradas en orden.
+let RT_EQUIPO = '';
+let RT_TIMER = null;
+const RT_COL = { EN_TRANSITO:'var(--am2)', EN_SITIO:'var(--az2)', CERRADO:'var(--vd2)',
+                 ESCALADO:'var(--mo2)', CANCELADO:'#8b949e', ABIERTO:'var(--rj2)', LIBRE:'#8b949e' };
+const RT_TXT = { EN_TRANSITO:'En camino', EN_SITIO:'En sitio', CERRADO:'Cerrado', ESCALADO:'Escalado',
+                 CANCELADO:'Cancelado', ABIERTO:'Abierto', LIBRE:'Libre' };
+
+function rtHoyStr(off=0) {
+  const d = new Date(); d.setDate(d.getDate() + off);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function rutaDia(off) { document.getElementById('rt-fecha').value = rtHoyStr(off); loadRuta(); }
+function rutaEquipo(btn) {
+  RT_EQUIPO = btn.dataset.eq;
+  btn.parentElement.querySelectorAll('[data-eq]').forEach(b => b.classList.toggle('on', b === btn));
+  loadRuta();
+}
+// Las fechas vienen en hora Colombia sin zona: "2026-10-20T08:10:00" → minutos dentro del día pedido
+function rtMin(iso, dia) {
+  if (!iso) return null;
+  const d = iso.slice(0, 10), m = (+iso.slice(11, 13)) * 60 + (+iso.slice(14, 16));
+  if (d < dia) return -1;          // venía de un día anterior
+  if (d > dia) return 24 * 60 + 1; // pasó al día siguiente
+  return m;
+}
+function rtHora(iso, dia) {
+  if (!iso) return '—';
+  const h = iso.slice(11, 16);
+  return iso.slice(0, 10) === dia ? h : `${iso.slice(8,10)}/${iso.slice(5,7)} ${h}`;
+}
+function rtDiff(a, b) {
+  if (!a || !b) return null;
+  return Math.round((new Date(b) - new Date(a)) / 60000);
+}
+function rtDur(min) {
+  if (min == null || min < 0) return '';
+  return min < 60 ? `${min} min` : `${Math.floor(min/60)}h ${String(min%60).padStart(2,'0')}m`;
+}
+
+async function loadRuta() {
+  const fEl = document.getElementById('rt-fecha');
+  if (!fEl.value) fEl.value = rtHoyStr(0);
+  const dia = fEl.value;
+  let data;
+  try {
+    data = await api(`/api/ruta-tecnicos?fecha=${dia}${RT_EQUIPO ? '&equipo=' + RT_EQUIPO : ''}`);
+  } catch (e) {
+    document.getElementById('rt-lista').innerHTML = `<div class="rt-empty">No se pudo cargar la ruta: ${esc(e.message || e)}</div>`;
+    return;
+  }
+  const esHoy = dia === rtHoyStr(0);
+  const now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+  const tecs = data.tecnicos || [];
+
+  // ── KPIs ──
+  const tot = tecs.reduce((a, r) => a + r.total, 0);
+  const cur = tecs.reduce((a, r) => a + r.en_curso, 0);
+  const cer = tecs.reduce((a, r) => a + r.cerrados, 0);
+  document.getElementById('rt-kpis').innerHTML = [
+    ['👷 Técnicos con soportes', `${data.tecnicos_con_soportes}<span style="font-size:12px;color:#8b949e"> / ${data.tecnicos_activos} activos</span>`, 'var(--az2)'],
+    ['🎫 Soportes del día', tot, '#e6edf3'],
+    ['🚧 En curso', cur, 'var(--am2)'],
+    ['✅ Cerrados', cer, 'var(--vd2)'],
+    ['⚠️ Sin asignar (ahora)', data.sin_asignar, data.sin_asignar ? 'var(--rj2)' : 'var(--vd2)'],
+  ].map(([l, v, c]) => `<div class="rt-kpi"><div class="l">${l}</div><div class="v" style="color:${c}">${v}</div></div>`).join('');
+
+  if (!tecs.length) {
+    document.getElementById('rt-lista').innerHTML =
+      `<div class="rt-empty">Ningún técnico tiene soportes el ${esc(dia)}${RT_EQUIPO ? ' (' + esc(RT_EQUIPO) + ')' : ''}.</div>`;
+    document.getElementById('rt-upd').textContent = `Actualizado ${now.toTimeString().slice(0, 5)}`;
+    return;
+  }
+
+  // ── Eje horario: 6:00–20:00, se amplía si hay actividad por fuera ──
+  let h0 = 6, h1 = 20;
+  tecs.forEach(r => r.tickets.forEach(t => {
+    [t.fecha_asignacion, t.fecha_llegada, t.fecha_cierre, t.fecha_cancelacion].forEach(x => {
+      const m = rtMin(x, dia);
+      if (m != null && m >= 0 && m <= 1440) { h0 = Math.min(h0, Math.floor(m / 60)); h1 = Math.max(h1, Math.ceil(m / 60)); }
+    });
+  }));
+  if (esHoy) { h0 = Math.min(h0, Math.floor(nowMin / 60)); h1 = Math.max(h1, Math.ceil(nowMin / 60)); }
+  h1 = Math.min(h1, 24);
+  const A = h0 * 60, B = Math.max(h1 * 60, A + 60), W = B - A;
+  const pct = m => `${(Math.min(Math.max(m, A), B) - A) / W * 100}%`;
+  const ticks = [];
+  for (let h = h0; h <= h1; h++) ticks.push(h);
+  const axis = `<div class="rt-axis">${ticks.map(h => `<span style="left:${pct(h*60)}">${h}:00</span>`).join('')}</div>`;
+  const grid = ticks.map(h => `<div class="rt-hl" style="left:${pct(h*60)}"></div>`).join('')
+             + (esHoy && nowMin >= A && nowMin <= B ? `<div class="rt-now" style="left:${pct(nowMin)}" title="Ahora"></div>` : '');
+  const fin = esHoy ? nowMin : B; // lo que sigue abierto se pinta hasta ahora (o hasta el final del eje)
+
+  document.getElementById('rt-lista').innerHTML = tecs.map(r => {
+    // Tramo de cada ticket en el eje y carril: si dos soportes se cruzan en el tiempo van en filas distintas
+    const lanesEnd = [];
+    const spans = r.tickets.map(t => {
+      const sA = rtMin(t.fecha_asignacion || t.fecha_apertura, dia);
+      const sL = rtMin(t.fecha_llegada, dia);
+      const sF = rtMin(t.fecha_cierre || t.fecha_cancelacion, dia);
+      const ini = Math.max(sA ?? A, A);
+      const llegada = sL != null ? Math.min(Math.max(sL, ini), B) : null;
+      let finT = sF != null ? sF : (['EN_TRANSITO','EN_SITIO'].includes(t.estado) ? fin : (llegada ?? ini) + 10);
+      finT = Math.min(Math.max(finT, ini + 4), B);
+      let lane = lanesEnd.findIndex(e => e <= ini);
+      if (lane < 0) { lane = lanesEnd.length; lanesEnd.push(finT); } else lanesEnd[lane] = finT;
+      return { t, ini, llegada, finT, lane };
+    });
+    const trackH = 10 + Math.max(lanesEnd.length, 1) * 28;
+    const bars = spans.map(({ t, ini, llegada, finT, lane }) => {
+      const cEnd = t.estado === 'CERRADO' ? 'var(--vd2)' : t.estado === 'ESCALADO' ? 'var(--mo2)'
+                 : t.estado === 'CANCELADO' ? '#8b949e' : 'var(--az2)';
+      const segs = [];
+      if (llegada != null) {
+        if (llegada > ini) segs.push(['var(--am2)', llegada - ini]);
+        segs.push([cEnd, Math.max(finT - llegada, 2)]);
+      } else {
+        segs.push([t.estado === 'CANCELADO' ? '#8b949e' : 'var(--am2)', finT - ini]);
+      }
+      const total = segs.reduce((a, s) => a + s[1], 0) || 1;
+      const tip = `#${t.slack_num || t.id} · ${t.site} ${t.torre || ''}\nAsignado: ${rtHora(t.fecha_asignacion, dia)}\n`
+                + `Llegada: ${rtHora(t.fecha_llegada, dia)}\nCierre: ${rtHora(t.fecha_cierre || t.fecha_cancelacion, dia)}\n`
+                + `Estado: ${RT_TXT[t.estado] || t.estado}`;
+      return `<div class="rt-bar" style="left:${pct(ini)};width:${(finT - ini) / W * 100}%;top:${5 + lane * 28}px" title="${esc(tip)}" onclick="showTopo(${t.id})">
+        ${segs.map(s => `<div class="seg" style="background:${s[0]};width:${s[1] / total * 100}%"></div>`).join('')}
+        <span class="lbl">${esc(t.codigo_sitio || t.site || '')}</span></div>`;
+    }).join('');
+
+    const stops = r.tickets.map((t, i) => {
+      const c = RT_COL[t.estado] || '#8b949e';
+      const enCamino = rtDiff(t.fecha_asignacion, t.fecha_llegada);
+      const enSitio = rtDiff(t.fecha_llegada, t.fecha_cierre);
+      return `<div class="rt-stop" style="border-left-color:${c}" onclick="showTopo(${t.id})">
+        <div class="t1">${i + 1}. #${esc(t.slack_num || t.id)} · ${esc(t.site)} ${esc(t.torre || '')}
+          ${t.equipo ? `<span class="rt-eq rt-eq-${esc(t.equipo)}">${esc(t.equipo)}</span>` : ''}</div>
+        <div class="t2">${esc(t.tipo || '')} · ${esc(t.afectados ?? 0)} afect. · <span style="color:${c};font-weight:600">${RT_TXT[t.estado] || esc(t.estado)}</span></div>
+        <div class="t2">🕐 ${rtHora(t.fecha_asignacion, dia)} → 📍 ${rtHora(t.fecha_llegada, dia)} → ✅ ${rtHora(t.fecha_cierre || t.fecha_cancelacion, dia)}${enCamino != null ? ` · llegó en ${rtDur(enCamino)}` : ''}${enSitio != null ? ` · en sitio ${rtDur(enSitio)}` : ''}</div>
+      </div>`;
+    }).join('');
+
+    const c = RT_COL[r.estado_actual];
+    return `<div class="rt-card">
+      <div class="rt-head">
+        <span class="rt-name">👷 ${esc(r.tecnico)}</span>
+        <span class="rt-sub">${esc(r.zona || '')}${r.telefono ? ' · ' + esc(r.telefono) : ''}</span>
+        <span class="rt-chip" style="color:${c};border-color:${c}">${RT_TXT[r.estado_actual]}</span>
+        <span class="rt-cnt"><b>${r.total}</b> soportes · <b style="color:var(--am2)">${r.en_curso}</b> en curso · <b style="color:var(--vd2)">${r.cerrados}</b> cerrados</span>
+      </div>
+      <div class="rt-scroll">${axis}<div class="rt-track" style="height:${trackH}px">${grid}${bars}</div></div>
+      <div class="rt-stops">${stops}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('rt-upd').textContent = `Actualizado ${now.toTimeString().slice(0, 5)}`;
+  // Si es hoy y la pestaña sigue abierta, refresca cada 60 s
+  clearTimeout(RT_TIMER);
+  if (esHoy) RT_TIMER = setTimeout(() => {
+    if (document.getElementById('tab-ruta').classList.contains('on')) loadRuta();
+  }, 60000);
+}
+</script>
+
