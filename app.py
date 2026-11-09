@@ -269,23 +269,14 @@ def log_actividad(texto, tipo, ticket_id=None, usuario=None):
     db.session.add(act)
 
 
-def sync_ticket_to_sheets(ticket, action='upsert'):
-    """Envía una copia del ticket a Google Sheets vía Apps Script.
-
-    Siempre retorna (ok: bool, mensaje: str). La sincronización es opcional:
-    si GOOGLE_SHEETS_WEBHOOK_URL no existe, no rompe la operación principal.
-    """
+def _post_to_sheets(payload_dict):
+    """POST al Apps Script. Retorna (ok, mensaje, respuesta_json_o_None)."""
     url = os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip()
     if not url:
-        return True, 'GOOGLE_SHEETS_WEBHOOK_URL no configurada; sincronización omitida'
+        return True, 'GOOGLE_SHEETS_WEBHOOK_URL no configurada; sincronización omitida', None
 
     try:
-        payload = json.dumps({
-            'action': action,
-            'ticket': ticket.to_dict(),
-            'synced_at': now_colombia().isoformat()
-        }, ensure_ascii=False).encode('utf-8')
-
+        payload = json.dumps(payload_dict, ensure_ascii=False).encode('utf-8')
         req = urllib.request.Request(
             url,
             data=payload,
@@ -297,20 +288,63 @@ def sync_ticket_to_sheets(ticket, action='upsert'):
             if resp.status >= 400:
                 msg = f'Google Sheets HTTP {resp.status}: {body[:300]}'
                 print(f'[WARN] {msg}')
-                return False, msg
+                return False, msg, None
+            parsed = None
             try:
                 parsed = json.loads(body or '{}')
                 if parsed.get('ok') is False:
                     msg = parsed.get('error') or body[:300] or 'Apps Script respondió ok=false'
                     print(f'[WARN] Google Sheets sync falló: {msg}')
-                    return False, msg
+                    return False, msg, parsed
             except Exception:
                 pass
-            return True, 'ok'
+            return True, 'ok', parsed
     except Exception as e:
         msg = f'{e.__class__.__name__}: {e}'
-        print(f'[WARN] No se pudo sincronizar ticket con Google Sheets: {msg}')
+        print(f'[WARN] No se pudo sincronizar con Google Sheets: {msg}')
+        return False, msg, None
+
+
+def sync_ticket_to_sheets(ticket, action='upsert'):
+    """Envía una copia del ticket a Google Sheets vía Apps Script.
+
+    `ticket` puede ser el modelo Ticket o un dict ya serializado (to_dict()).
+    Siempre retorna (ok: bool, mensaje: str). La sincronización es opcional:
+    si GOOGLE_SHEETS_WEBHOOK_URL no existe, no rompe la operación principal.
+    """
+    data = ticket if isinstance(ticket, dict) else ticket.to_dict()
+    ok, msg, _ = _post_to_sheets({
+        'action': action,
+        'ticket': data,
+        'synced_at': now_colombia().isoformat()
+    })
+    return ok, msg
+
+
+def delete_ticket_from_sheets(ticket_snapshot):
+    """Borra del Google Sheet SOLO la(s) fila(s) cuyo 'ID Interno' coincide.
+
+    No toca encabezados, formato, filtros ni las demás filas. Se envía el
+    ticket completo para que, si el Apps Script publicado aún es la versión
+    vieja (sin 'delete'), la fila no quede vacía: solo se marcaría con
+    Última acción = 'delete'. Retorna (ok, mensaje).
+    """
+    if not os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip():
+        return True, 'GOOGLE_SHEETS_WEBHOOK_URL no configurada; no hay fila que borrar'
+
+    ok, msg, parsed = _post_to_sheets({
+        'action': 'delete',
+        'ticket': ticket_snapshot,
+        'synced_at': now_colombia().isoformat()
+    })
+    if not ok:
         return False, msg
+    if not isinstance(parsed, dict) or 'deleted' not in parsed:
+        return False, ('El Apps Script publicado no soporta borrado (versión vieja). '
+                       'Actualiza el código y publica una nueva versión del Web App.')
+    if parsed.get('deleted', 0) == 0:
+        return True, 'El ticket no estaba en el Sheet; nada que borrar'
+    return True, f"{parsed.get('deleted')} fila(s) borrada(s) del Sheet"
 
 
 def _norm_txt(value):
@@ -1159,11 +1193,24 @@ def eliminar_ticket(tid):
     """Solo coordinador puede eliminar tickets. Queda registro en auditoría."""
     t = Ticket.query.get_or_404(tid)
     ref = f"#{t.slack_num or t.id} — {t.site} {t.torre}"
+    # Copia del ticket antes de borrarlo, para identificar su fila en el Sheet
+    snapshot = t.to_dict()
     # cascade='all, delete-orphan' en el modelo borra el Cierre automáticamente
     db.session.delete(t)
     log_actividad(f"ELIMINAR ticket {ref}", 'alert', None, session.get('nombre'))
     db.session.commit()
-    return jsonify({'ok': True, 'eliminado': ref})
+
+    # Borra solo la fila de este ticket en Google Sheets (las demás no se tocan).
+    # Nota: limpiar_mes y archivar_tickets.py NO llaman esto a propósito:
+    # allí el Sheet es el archivo histórico y la fila debe quedarse.
+    sheets_ok, sheets_msg = delete_ticket_from_sheets(snapshot)
+    if not sheets_ok:
+        log_actividad(f"Ticket {ref} eliminado de la app pero NO del Sheet: {sheets_msg}",
+                      'alert', None, session.get('nombre'))
+        db.session.commit()
+
+    return jsonify({'ok': True, 'eliminado': ref,
+                    'sheets_ok': sheets_ok, 'sheets_msg': sheets_msg})
 
 
 # ─── API: Técnicos ────────────────────────────────────
