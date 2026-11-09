@@ -1663,7 +1663,11 @@ async function confirmarEliminarTicket() {
   document.getElementById('m-confirm-del').classList.remove('on');
   try {
     const res = await api(`/api/tickets/${_pendingDeleteId}`, { method: 'DELETE' });
-    showToast(`🗑 Ticket eliminado: ${res.eliminado}`, 'warn');
+    if (res.sheets_ok === false) {
+      showToast(`🗑 Ticket ${res.eliminado} eliminado, pero NO se borró del Sheet: ${res.sheets_msg}`, 'err');
+    } else {
+      showToast(`🗑 Ticket eliminado: ${res.eliminado} (también del Sheet)`, 'warn');
+    }
     _pendingDeleteId = null;
     loadTickets();
   } catch(e) { showToast('Error: ' + e.message, 'err'); }
