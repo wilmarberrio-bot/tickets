@@ -69,6 +69,19 @@ function doPost(e) {
       return json_({ ok: false, error: 'Payload inválido: falta ticket.id' });
     }
 
+    // Borrado: elimina SOLO la(s) fila(s) con este ID Interno.
+    // No toca encabezados, formato, filtros ni las demás filas.
+    if (action === 'delete') {
+      const lock = LockService.getScriptLock();
+      lock.waitLock(20000);
+      try {
+        const deleted = deleteTicketRows_(sheet, ticket.id);
+        return json_({ ok: true, action, ticket_id: ticket.id, deleted });
+      } finally {
+        lock.releaseLock();
+      }
+    }
+
     const row = buildRow_(ticket, action, syncedAt);
     if (row.length !== HEADERS.length) {
       return json_({ ok: false, error: `Estructura inválida: HEADERS=${HEADERS.length}, ROW=${row.length}` });
@@ -121,6 +134,22 @@ function findTicketRow_(sheet, ticketId) {
     if (String(values[i][0]) === id) return i + 2;
   }
   return null;
+}
+
+function deleteTicketRows_(sheet, ticketId) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  const id = String(ticketId);
+  const values = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  let deleted = 0;
+  // De abajo hacia arriba para que los índices no se corran al borrar.
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (String(values[i][0]) === id) {
+      sheet.deleteRow(i + 2);
+      deleted++;
+    }
+  }
+  return deleted;
 }
 
 function cleanupDuplicateRows_(sheet, ticketId, keepRow) {
