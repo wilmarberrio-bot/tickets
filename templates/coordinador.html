@@ -1664,9 +1664,9 @@ async function confirmarEliminarTicket() {
   try {
     const res = await api(`/api/tickets/${_pendingDeleteId}`, { method: 'DELETE' });
     if (res.sheets_ok === false) {
-      showToast(`🗑 Ticket ${res.eliminado} eliminado, pero NO se borró del Sheet: ${res.sheets_msg}`, 'err');
+      showToast(`🗑 Ticket ${res.eliminado} eliminado, pero NO se marcó DELETED en el Sheet: ${res.sheets_msg}`, 'err');
     } else {
-      showToast(`🗑 Ticket eliminado: ${res.eliminado} (también del Sheet)`, 'warn');
+      showToast(`🗑 Ticket eliminado: ${res.eliminado} (marcado DELETED en el Sheet)`, 'warn');
     }
     _pendingDeleteId = null;
     loadTickets();
