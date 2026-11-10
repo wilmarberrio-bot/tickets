@@ -321,30 +321,24 @@ def sync_ticket_to_sheets(ticket, action='upsert'):
     return ok, msg
 
 
-def delete_ticket_from_sheets(ticket_snapshot):
-    """Borra del Google Sheet SOLO la(s) fila(s) cuyo 'ID Interno' coincide.
+def mark_ticket_deleted_in_sheets(ticket_snapshot):
+    """Marca en Google Sheets el ticket eliminado desde la app.
 
-    No toca encabezados, formato, filtros ni las demás filas. Se envía el
-    ticket completo para que, si el Apps Script publicado aún es la versión
-    vieja (sin 'delete'), la fila no quede vacía: solo se marcaría con
-    Última acción = 'delete'. Retorna (ok, mensaje).
+    Usa el Apps Script ya publicado (upsert por 'ID Interno'): reenvía la fila
+    completa del ticket con Estado = 'DELETED' y Última acción = 'deleted'.
+    Así deja de contar como EN_TRANSITO, pero la fila y todos sus datos se
+    conservan. No toca encabezados, formato ni las demás filas.
+    Retorna (ok, mensaje).
     """
     if not os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '').strip():
-        return True, 'GOOGLE_SHEETS_WEBHOOK_URL no configurada; no hay fila que borrar'
+        return True, 'GOOGLE_SHEETS_WEBHOOK_URL no configurada; Sheet no actualizado'
 
-    ok, msg, parsed = _post_to_sheets({
-        'action': 'delete',
-        'ticket': ticket_snapshot,
-        'synced_at': now_colombia().isoformat()
-    })
+    data = dict(ticket_snapshot)
+    data['estado'] = 'DELETED'
+    ok, msg = sync_ticket_to_sheets(data, 'deleted')
     if not ok:
         return False, msg
-    if not isinstance(parsed, dict) or 'deleted' not in parsed:
-        return False, ('El Apps Script publicado no soporta borrado (versión vieja). '
-                       'Actualiza el código y publica una nueva versión del Web App.')
-    if parsed.get('deleted', 0) == 0:
-        return True, 'El ticket no estaba en el Sheet; nada que borrar'
-    return True, f"{parsed.get('deleted')} fila(s) borrada(s) del Sheet"
+    return True, 'Marcado como DELETED en el Sheet'
 
 
 def _norm_txt(value):
@@ -1193,19 +1187,19 @@ def eliminar_ticket(tid):
     """Solo coordinador puede eliminar tickets. Queda registro en auditoría."""
     t = Ticket.query.get_or_404(tid)
     ref = f"#{t.slack_num or t.id} — {t.site} {t.torre}"
-    # Copia del ticket antes de borrarlo, para identificar su fila en el Sheet
+    # Copia del ticket antes de borrarlo, para actualizar su fila en el Sheet
     snapshot = t.to_dict()
     # cascade='all, delete-orphan' en el modelo borra el Cierre automáticamente
     db.session.delete(t)
     log_actividad(f"ELIMINAR ticket {ref}", 'alert', None, session.get('nombre'))
     db.session.commit()
 
-    # Borra solo la fila de este ticket en Google Sheets (las demás no se tocan).
+    # En el Sheet la fila se conserva con Estado = DELETED (deja de verse en tránsito).
     # Nota: limpiar_mes y archivar_tickets.py NO llaman esto a propósito:
-    # allí el Sheet es el archivo histórico y la fila debe quedarse.
-    sheets_ok, sheets_msg = delete_ticket_from_sheets(snapshot)
+    # allí el Sheet es el archivo histórico y la fila debe quedar con su estado real.
+    sheets_ok, sheets_msg = mark_ticket_deleted_in_sheets(snapshot)
     if not sheets_ok:
-        log_actividad(f"Ticket {ref} eliminado de la app pero NO del Sheet: {sheets_msg}",
+        log_actividad(f"Ticket {ref} eliminado de la app pero NO se marcó DELETED en el Sheet: {sheets_msg}",
                       'alert', None, session.get('nombre'))
         db.session.commit()
 

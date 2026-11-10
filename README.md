@@ -125,7 +125,7 @@ torre-control-ftth/
 | PUT | `/api/tickets/<id>/asignar` | Asignar técnico a ticket |
 | PUT | `/api/tickets/<id>/en-sitio` | Técnico marca llegada |
 | POST | `/api/tickets/<id>/cerrar` | Cerrar ticket con formulario completo |
-| DELETE | `/api/tickets/<id>` | Eliminar ticket (coordinador). También borra **solo su fila** en Google Sheets |
+| DELETE | `/api/tickets/<id>` | Eliminar ticket (coordinador). En Google Sheets su fila se conserva y cambia a Estado = `DELETED` |
 | GET | `/api/tecnicos` | Lista técnicos |
 | POST | `/api/tecnicos` | Agregar técnico |
 | PUT | `/api/tecnicos/<id>` | Editar técnico |
